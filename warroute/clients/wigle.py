@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 
 WIGLE_API_BASE = "https://api.wigle.net"
 SEARCH_PATH = "/api/v2/network/search"
-DEFAULT_TIMEOUT = 30.0
+PROFILE_PATH = "/api/v2/profile/user"  # cheap auth check; search hits the slow network index
+DEFAULT_TIMEOUT = 60.0  # WiGLE free-tier search is slow; 30s hit ReadTimeouts
 MIN_INTERVAL_SEC = 1.05  # nudge above 1 req/sec to stay under the throttle
 
 
@@ -103,6 +104,32 @@ class WigleClient:
                 await asyncio.sleep(wait)
             WigleClient._last_call_at = time.monotonic()
 
+    async def profile(self) -> dict[str, Any]:
+        """GET /api/v2/profile/user — cheap auth check (sub-second).
+
+        Returns the raw profile dict. Use for liveness/auth probes instead of
+        search_bbox, which hits the slow network index.
+        """
+        if self._client is None:
+            raise WigleError("WigleClient must be used as an async context manager")
+        await self._throttle()
+        try:
+            resp = await self._client.get(PROFILE_PATH)
+        except httpx.RequestError as exc:
+            raise WigleError(f"WiGLE request failed ({type(exc).__name__}): {exc}") from exc
+
+        if resp.status_code == 401:
+            raise WigleAuthError("WiGLE rejected credentials (401)")
+        if resp.status_code == 429:
+            raise WigleRateLimitError("WiGLE rate limit hit (429)")
+        if resp.status_code >= 400:
+            raise WigleError(f"WiGLE returned HTTP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            return dict(resp.json())
+        except (ValueError, TypeError) as exc:
+            raise WigleError(f"WiGLE profile non-JSON: {resp.text[:200]}") from exc
+
     async def search_bbox(
         self,
         bbox: BBox,
@@ -122,7 +149,7 @@ class WigleClient:
         try:
             resp = await self._client.get(SEARCH_PATH, params=params)
         except httpx.RequestError as exc:
-            raise WigleError(f"WiGLE request failed: {exc}") from exc
+            raise WigleError(f"WiGLE request failed ({type(exc).__name__}): {exc}") from exc
 
         if resp.status_code == 401:
             raise WigleAuthError("WiGLE rejected credentials (401)")

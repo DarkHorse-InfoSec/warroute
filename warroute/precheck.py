@@ -28,7 +28,6 @@ from pathlib import Path
 from warroute.clients.ors import OrsAuthError, OrsClient, OrsError, OrsQuotaError, Waypoint
 from warroute.clients.wdgowars import WdgowarsAuthError, WdgowarsClient, WdgowarsError
 from warroute.clients.wigle import (
-    BBox,
     WigleAuthError,
     WigleClient,
     WigleError,
@@ -65,17 +64,18 @@ def verdict(results: list[CheckResult]) -> Status:
 
 
 async def check_wigle() -> CheckResult:
-    """Cheap WIGLE auth check: 1-result search at home location."""
-    settings = get_settings()
+    """Cheap WIGLE auth check via /api/v2/profile/user.
+
+    Sub-second response, no network-index lookup. The previous bbox-search
+    variant was prone to 60s+ ReadTimeouts on the free tier even for 100m
+    bboxes, masking real auth/network issues as transport timeouts.
+    """
     try:
-        bbox = _tiny_bbox(settings.home_lat, settings.home_lon)
         async with WigleClient() as wigle:
-            result = await wigle.search_bbox(bbox, result_per_page=1)
-        return CheckResult(
-            name="WiGLE",
-            status=Status.OK,
-            detail=f"auth ok; {result.total_results} networks in home bbox",
-        )
+            profile = await wigle.profile()
+        userid = profile.get("userid")
+        detail = f"auth ok; userid={userid}" if userid else "auth ok"
+        return CheckResult(name="WiGLE", status=Status.OK, detail=detail)
     except WigleAuthError as exc:
         return CheckResult(
             name="WiGLE",
@@ -222,17 +222,6 @@ def _check_writable_dir(name: str, path: Path) -> CheckResult:
             detail=f"not writable: {path} ({exc})",
             hint="chown / chmod the directory so the running user can write",
         )
-
-
-def _tiny_bbox(lat: float, lon: float) -> BBox:
-    """~100m square centered on the home point. Cheap for WIGLE search."""
-    delta = 0.0009  # roughly 100 m latitude
-    return BBox(
-        south=lat - delta,
-        north=lat + delta,
-        west=lon - delta,
-        east=lon + delta,
-    )
 
 
 async def run_all() -> list[CheckResult]:

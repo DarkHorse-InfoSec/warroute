@@ -72,6 +72,21 @@ Updated whenever Domenic corrects an approach or confirms a non-obvious choice.
 **Rule going forward:** When a Unix-style path argument lands in the wrong place on Windows, suspect MSYS path conversion before suspecting the program. README + project CLAUDE.md both mention this. Global memory has a reference entry too.
 **Why:** Wasted ~5 minutes the first time. The error message ("404 Not Found") was indistinguishable from a real wrong-endpoint case until inspecting the request URL.
 
+### 2026-05-11 - Auth-check should use the cheapest available endpoint, not a feature endpoint
+
+**Trigger:** Precheck's WiGLE auth-check called `search_bbox` (a tiny 100m bbox, 1-result limit), figuring it was cheap. On the free tier, the search endpoint hit the network-density index which was variable 15-19s typical and occasionally >60s. The check would `ReadTimeout` on cold-call and report a misleading "verify TLS cert chain" hint. Bumping the timeout to 60s wasn't enough on first runs.
+
+**Correction:** Probe for a purpose-built auth endpoint before reusing a feature endpoint. For WiGLE, `/api/v2/profile/user` returns in 0.5s with the user profile dict — it's the right endpoint for "am I authenticated." Refactored `check_wigle()` to use it.
+
+**Rule going forward:**
+1. For any service's auth-check (precheck, liveness probe, health endpoint), look for an endpoint that returns *only* identity info (`/profile`, `/me`, `/whoami`, `/account`). Don't conflate auth-check with a feature call.
+2. Probe candidate endpoints empirically (one-off `uv run python -c "..."` script with structure-only output) before designing the check. Took ~30s of probing to find `/api/v2/profile/user` once we knew to look.
+3. When wrapping a transport-layer exception (`httpx.RequestError` and friends), always include `type(exc).__name__` in the wrapped message. Empty-message exceptions like `ReadTimeout('')` will otherwise erase the cause and route the user toward misleading hints. There's a regression test for this in `test_wigle_client.py::test_profile_request_error_includes_exception_type`.
+
+**Why:** A 15-60s "auth check" that occasionally times out is worse than no auth check; it lies about the failure mode (suggests TLS / cert chain when reality is a slow backend). Cheap, deterministic, auth-only endpoints are what precheck needs.
+
+---
+
 ### 2026-05-10 - Don't roll a custom scoring formula
 
 **Trigger:** Initial PLAN.md proposed `score = 0.6 * new_to_you + 0.4 * new_territory_cell`.

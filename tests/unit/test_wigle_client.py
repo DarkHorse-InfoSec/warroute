@@ -7,6 +7,7 @@ import pytest
 import respx
 
 from warroute.clients.wigle import (
+    PROFILE_PATH,
     SEARCH_PATH,
     WIGLE_API_BASE,
     BBox,
@@ -104,3 +105,46 @@ def test_missing_credentials_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     with pytest.raises(WigleAuthError):
         WigleClient()
+
+
+# ----- profile() (cheap auth check) ----------------------------------------
+
+
+@respx.mock
+async def test_profile_returns_dict() -> None:
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"userid": "AID12345", "email": "x@example.com", "donate": False},
+        )
+    )
+    async with WigleClient() as wigle:
+        profile = await wigle.profile()
+    assert profile["userid"] == "AID12345"
+    assert profile["email"] == "x@example.com"
+
+
+@respx.mock
+async def test_profile_raises_on_401() -> None:
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(return_value=httpx.Response(401))
+    async with WigleClient() as wigle:
+        with pytest.raises(WigleAuthError):
+            await wigle.profile()
+
+
+@respx.mock
+async def test_profile_raises_on_429() -> None:
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(return_value=httpx.Response(429))
+    async with WigleClient() as wigle:
+        with pytest.raises(WigleRateLimitError):
+            await wigle.profile()
+
+
+@respx.mock
+async def test_profile_request_error_includes_exception_type() -> None:
+    """Regression: empty-message httpx errors (e.g. ReadTimeout('')) must still
+    surface the exception type in the wrapped WigleError message."""
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(side_effect=httpx.ReadTimeout(""))
+    async with WigleClient() as wigle:
+        with pytest.raises(WigleError, match="ReadTimeout"):
+            await wigle.profile()

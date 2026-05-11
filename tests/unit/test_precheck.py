@@ -10,7 +10,7 @@ import respx
 
 from warroute.clients.ors import DIRECTIONS_PATH, ORS_API_BASE
 from warroute.clients.wdgowars import ME_PATH, WDGOWARS_API_BASE
-from warroute.clients.wigle import SEARCH_PATH, WIGLE_API_BASE
+from warroute.clients.wigle import PROFILE_PATH, WIGLE_API_BASE
 from warroute.config import get_settings
 from warroute.precheck import (
     QUOTA_WARN_THRESHOLD,
@@ -80,19 +80,20 @@ def test_verdict_fail_dominates_warn() -> None:
 
 @respx.mock
 async def test_check_wigle_ok() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(
         return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 42, "results": []}
+            200,
+            json={"userid": "AID12345", "email": "x@example.com", "donate": False},
         )
     )
     result = await check_wigle()
     assert result.status == Status.OK
-    assert "42" in result.detail
+    assert "AID12345" in result.detail
 
 
 @respx.mock
 async def test_check_wigle_auth_fail() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(return_value=httpx.Response(401))
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(return_value=httpx.Response(401))
     result = await check_wigle()
     assert result.status == Status.FAIL
     assert result.hint is not None
@@ -101,7 +102,7 @@ async def test_check_wigle_auth_fail() -> None:
 
 @respx.mock
 async def test_check_wigle_rate_limit_is_warn() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(return_value=httpx.Response(429))
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(return_value=httpx.Response(429))
     result = await check_wigle()
     assert result.status == Status.WARN
     assert "req/sec" in (result.hint or "")
@@ -109,9 +110,7 @@ async def test_check_wigle_rate_limit_is_warn() -> None:
 
 @respx.mock
 async def test_check_wigle_transport_failure() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        side_effect=httpx.ConnectError("boom")
-    )
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(side_effect=httpx.ConnectError("boom"))
     result = await check_wigle()
     assert result.status == Status.FAIL
     assert "cert chain" in (result.hint or "")
@@ -223,9 +222,7 @@ def test_check_filesystem_ok(tmp_path: Path) -> None:
         assert r.status == Status.OK
 
 
-def test_check_filesystem_missing_spool(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_check_filesystem_missing_spool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SPOOL_DIR", str(tmp_path / "does-not-exist"))
     get_settings.cache_clear()
     results = check_filesystem()
@@ -234,9 +231,7 @@ def test_check_filesystem_missing_spool(
     assert "mkdir" in (spool.hint or "")
 
 
-def test_check_filesystem_spool_is_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_check_filesystem_spool_is_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spool_as_file = tmp_path / "spool-as-file"
     spool_as_file.write_text("oops")
     monkeypatch.setenv("SPOOL_DIR", str(spool_as_file))
@@ -252,24 +247,16 @@ def test_check_filesystem_spool_is_file(
 
 @respx.mock
 async def test_run_all_happy_path() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 5, "results": []}
-        )
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(
+        return_value=httpx.Response(200, json={"userid": "AID12345", "email": "x@example.com"})
     )
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"username": "x", "wifi": 0, "recent_today": 0}
-        )
+        return_value=httpx.Response(200, json={"username": "x", "wifi": 0, "recent_today": 0})
     )
     respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "routes": [
-                    {"summary": {"distance": 100.0, "duration": 10.0}, "geometry": None}
-                ]
-            },
+            json={"routes": [{"summary": {"distance": 100.0, "duration": 10.0}, "geometry": None}]},
         )
     )
 
@@ -281,20 +268,14 @@ async def test_run_all_happy_path() -> None:
 
 @respx.mock
 async def test_run_all_mixed_verdict_fail_dominates() -> None:
-    respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(return_value=httpx.Response(401))
+    respx.get(WIGLE_API_BASE + PROFILE_PATH).mock(return_value=httpx.Response(401))
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"username": "x", "wifi": 0, "recent_today": 0}
-        )
+        return_value=httpx.Response(200, json={"username": "x", "wifi": 0, "recent_today": 0})
     )
     respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
         return_value=httpx.Response(
             200,
-            json={
-                "routes": [
-                    {"summary": {"distance": 100.0, "duration": 10.0}, "geometry": None}
-                ]
-            },
+            json={"routes": [{"summary": {"distance": 100.0, "duration": 10.0}, "geometry": None}]},
         )
     )
 

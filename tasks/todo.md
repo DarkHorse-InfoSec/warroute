@@ -151,7 +151,10 @@ Clean network (cert-chain pre-verified Let's Encrypt for all three API hosts). U
 - [ ] **Gang-territory overlay on `/coverage`.** Pull `/api/territories` and render the 187 gang `hull` polygons as colored layers on the Leaflet map. Highlight `gang_id==16` ("Biscuits", our gang) distinctly. New file `warroute/clients/wdgowars.py` method `gang_territories()` + a `/coverage/gangs.geojson` route + Leaflet layer.
 - [ ] **Richer `/api/me` parsing.** Extend `WdgowarsClient.me()` and the `PlayerState` dataclass to surface the 16 currently-unmapped fields: `country, joined, is_superuser, trusted, gang, gang_id, gang_role, mesh, cracked, aircraft, recent_7d, reinforce (per-zoom-counts), reinforce_total, credits {balance/bounties/lifetime}, badges`. Web dashboard's player card can then show gang affiliation, 7-day activity, credits balance, badge count.
 - [ ] **Server-version awareness.** Cheap GET to `/api/stats.version` at precheck time; warn if WDGoWars version changes (might expose new endpoints worth re-probing).
-- [ ] **Precheck robustness fix.** When `httpx.RequestError` has empty `str()` (e.g. transport-layer issues with no message), `clients/wigle.py` raises `WigleError("WiGLE request failed: ")` with no detail and the precheck hint suggests TLS-chain check, which is misleading. Use `repr(exc)` or `type(exc).__name__: {exc!s}` so the type at minimum is in the message. Same review for `clients/wdgowars.py` and `clients/ors.py`.
+- [x] **Precheck robustness fix.** (Done 2026-05-11 PM.) Two changes:
+  - `check_wigle()` now uses `/api/v2/profile/user` (sub-second, auth-only) instead of `search_bbox` (which hit the slow network index and timed out at 30-60s on the free tier).
+  - All three clients (`wigle.py`, `wdgowars.py`, `ors.py`) now include `type(exc).__name__` in the wrapped error message, so empty-`str()` exceptions like `ReadTimeout('')` still surface their type in precheck detail. Includes a regression test (`test_profile_request_error_includes_exception_type`).
+  - Test count: 156 -> 160 (+4 new WigleClient.profile() coverage).
 
 ### `.env.example` commit
 

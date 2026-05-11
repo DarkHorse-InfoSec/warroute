@@ -113,7 +113,7 @@ class OrsClient:
         try:
             resp = await self._client.post(path, json=json_body)
         except httpx.RequestError as exc:
-            raise OrsError(f"ORS request to {path} failed: {exc}") from exc
+            raise OrsError(f"ORS request to {path} failed ({type(exc).__name__}): {exc}") from exc
 
         if resp.status_code in (401, 403):
             raise OrsAuthError(f"ORS rejected key at {path} ({resp.status_code})")

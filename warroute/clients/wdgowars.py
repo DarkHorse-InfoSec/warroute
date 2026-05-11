@@ -110,7 +110,9 @@ class WdgowarsClient:
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.RequestError as exc:
-            raise WdgowarsError(f"WDGoWars request to {path} failed: {exc}") from exc
+            raise WdgowarsError(
+                f"WDGoWars request to {path} failed ({type(exc).__name__}): {exc}"
+            ) from exc
 
         if resp.status_code in (401, 403):
             raise WdgowarsAuthError(f"WDGoWars rejected token at {path} ({resp.status_code})")
