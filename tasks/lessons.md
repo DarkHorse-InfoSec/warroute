@@ -36,6 +36,21 @@ Updated whenever Domenic corrects an approach or confirms a non-obvious choice.
 **Rule going forward:** `dict.get(...) or dict.get(...)` is fine for "first non-None string-ish value." For numeric or boolean fields where 0/False are valid, use `for k in keys: if k in payload: return payload[k]`.
 **Why:** This bug silently bypassed the WDGoWars quota check in production-like scenarios, allowing uploads that should have been deferred. Caught only because the unit test set `daily_quota_remaining: 0` and asserted the skip path was taken.
 
+### 2026-05-11 - On unknown networks, cert-chain-check before transmitting any API token
+
+**Trigger:** Started the WDGoWars territory probe on the school PC. First HTTPS call hit `[SSL: CERTIFICATE_VERIFY_FAILED]`. Instinct was "stale certifi bundle, set verify=False and move on."
+
+**Correction:** Ran `openssl s_client` first. Cert chain terminated at a FortiGate inspection device (`O=Fortinet, CN=FG6H0FTB22903890`). The school's NCSUVT network is performing TLS MITM on outbound HTTPS. Setting `verify=False` would have transmitted the WDGOWARS_TOKEN (and any other API token in the same session: WIGLE, ORS) in plaintext to school IT's inspection logs.
+
+**Rule going forward:**
+1. When working from the school PC (or any non-home/non-VPS network), run `openssl s_client -showcerts -servername <host> -connect <host>:443 2>&1 | grep -E "(issuer|subject|verify)"` BEFORE letting any code make an authenticated HTTPS call. If the issuer is a vendor name (Fortinet, Palo Alto, Zscaler, Cisco, Barracuda, Forcepoint, Sophos, F5, SonicWall) and not a real public CA, the network is intercepting. Defer to a clean network.
+2. NEVER bypass cert verification to "make it work" against an authenticated endpoint. Python's secure-by-default behavior is the safety mechanism, not a bug.
+3. Continue offline-safe work locally (code, mocked tests, docs, infra artifacts) and surface the network finding to Domenic immediately. Don't try to debug around it silently.
+
+**Why:** Python aborted the handshake before the token was sent, so no leak occurred on the first run. A bypass would have sent the tokens to the Fortinet device on every call. Rule #1 (never let a secret reach output) applies to network egress, not just chat egress. Full write-up in `DECISIONS.md` 2026-05-11 entry; generalized lesson in global memory at `feedback_verify_tls_chain_before_sending_tokens.md`.
+
+---
+
 ### 2026-05-11 - Probe undocumented APIs empirically; don't guess auth scheme
 
 **Trigger:** Assumed WDGoWars used `Authorization: Bearer <token>` based on PLAN.md prose. First real call 401'd. Spent a moment debugging the token before realizing the auth *style* might be wrong.

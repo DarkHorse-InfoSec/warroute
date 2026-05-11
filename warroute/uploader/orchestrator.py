@@ -7,6 +7,7 @@ Flow:
   4. asyncio.gather both uploads in parallel
   5. record a sessions row with both upload timestamps + outcomes
   6. update observations table (insert new BSSIDs, bump times_seen for repeats)
+  7. (best-effort) send ntfy.sh run-complete push if NTFY_TOPIC + NTFY_NOTIFY_RUN
 """
 
 from __future__ import annotations
@@ -18,8 +19,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from warroute.clients.ntfy import NtfyClient
 from warroute.clients.wdgowars import WdgowarsError
 from warroute.clients.wigle import WigleError
+from warroute.config import get_settings
 from warroute.db import transaction
 from warroute.uploader.parser import ParseResult, parse
 from warroute.uploader.wdgowars_upload import (
@@ -75,7 +78,7 @@ async def ingest(csv_path: Path, source: str = "wigle-android") -> IngestResult:
     session_id = _record_session(parsed, source, new_aps, wigle_outcome, wdgowars_outcome)
     _record_observations(parsed, session_id)
 
-    return IngestResult(
+    result = IngestResult(
         csv_path=csv_path,
         csv_sha256=parsed.csv_sha256,
         session_id=session_id,
@@ -85,6 +88,50 @@ async def ingest(csv_path: Path, source: str = "wigle-android") -> IngestResult:
         wigle=wigle_outcome,
         wdgowars=wdgowars_outcome,
     )
+    await _send_run_notification(result)
+    return result
+
+
+async def _send_run_notification(result: IngestResult) -> None:
+    """Best-effort ntfy.sh run-complete push. Never raises -- a notification
+    failure must not affect the ingest outcome.
+
+    Future expansion (not in this PR): plan-complete and quota-warning toggles
+    already in settings (NTFY_NOTIFY_PLAN, NTFY_NOTIFY_QUOTA) but currently
+    no-op. See DECISIONS.md 2026-05-11 ntfy.sh notifications entry.
+    """
+    settings = get_settings()
+    if not settings.ntfy_topic or not settings.ntfy_notify_run:
+        return
+
+    wigle_label = _outcome_label(result.wigle)
+    wdg_label = _outcome_label(result.wdgowars)
+    body = (
+        f"+{result.new_aps} new APs of {result.total_aps} total. "
+        f"WiGLE: {wigle_label}. WDGoWars: {wdg_label}."
+    )
+    title = f"WarRoute: Run #{result.session_id}"
+    tags = ["car"]
+    click = (
+        f"{settings.web_base_url.rstrip('/')}/runs/{result.session_id}"
+        if settings.web_base_url and result.session_id is not None
+        else None
+    )
+    try:
+        async with NtfyClient() as ntfy:
+            await ntfy.notify(body, title=title, priority=3, tags=tags, click_url=click)
+    except Exception as exc:  # broad on purpose: best-effort channel must never break ingest
+        logger.warning("ntfy.sh notification failed (ignored): %s", exc)
+
+
+def _outcome_label(outcome: WigleUploadResult | WdgowarsUploadResult | str | None) -> str:
+    if outcome is None:
+        return "n/a"
+    if isinstance(outcome, str):
+        if outcome.startswith("skipped"):
+            return "skipped"
+        return "failed"
+    return "ok" if getattr(outcome, "success", False) else "failed"
 
 
 async def _safe_wigle(csv_path: Path) -> WigleUploadResult | str:

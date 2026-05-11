@@ -11,6 +11,7 @@ import respx
 from warroute.clients.wdgowars import ME_PATH, WDGOWARS_API_BASE
 from warroute.clients.wdgowars import UPLOAD_PATH as WDG_UPLOAD
 from warroute.clients.wigle import WIGLE_API_BASE
+from warroute.config import get_settings
 from warroute.db import run_migrations, transaction
 from warroute.uploader.orchestrator import ingest
 from warroute.uploader.wdgowars_upload import WdgowarsUploadResult
@@ -131,3 +132,99 @@ async def test_ingest_observations_dedup_across_runs() -> None:
     with transaction() as conn:
         n = conn.execute("SELECT COUNT(*) AS n FROM observations").fetchone()["n"]
     assert n == 5
+
+
+@respx.mock
+async def test_ingest_fires_ntfy_when_topic_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NTFY_TOPIC", "warroute-run")
+    monkeypatch.setenv("NTFY_NOTIFY_RUN", "true")
+    get_settings.cache_clear()
+    run_migrations()
+    _mock_happy_path()
+    ntfy_route = respx.post("https://ntfy.sh/warroute-run").mock(
+        return_value=httpx.Response(200, json={"id": "n1"})
+    )
+
+    result = await ingest(FIXTURE)
+    assert result.session_id is not None
+    assert ntfy_route.called
+    sent = ntfy_route.calls.last.request
+    body = sent.content.decode()
+    assert "5 new APs" in body
+    assert "WiGLE: ok" in body
+    assert "WDGoWars: ok" in body
+    assert sent.headers["Title"] == f"WarRoute: Run #{result.session_id}"
+    assert sent.headers["Priority"] == "3"
+    assert "car" in sent.headers["Tags"]
+
+
+@respx.mock
+async def test_ingest_skips_ntfy_when_topic_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NTFY_TOPIC", "")
+    get_settings.cache_clear()
+    run_migrations()
+    _mock_happy_path()
+    ntfy_route = respx.post("https://ntfy.sh/whatever").mock(
+        return_value=httpx.Response(200)
+    )
+
+    await ingest(FIXTURE)
+    assert ntfy_route.called is False
+
+
+@respx.mock
+async def test_ingest_skips_ntfy_when_toggle_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NTFY_TOPIC", "warroute-run")
+    monkeypatch.setenv("NTFY_NOTIFY_RUN", "false")
+    get_settings.cache_clear()
+    run_migrations()
+    _mock_happy_path()
+    ntfy_route = respx.post("https://ntfy.sh/warroute-run").mock(
+        return_value=httpx.Response(200)
+    )
+
+    await ingest(FIXTURE)
+    assert ntfy_route.called is False
+
+
+@respx.mock
+async def test_ingest_succeeds_when_ntfy_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NTFY_TOPIC", "warroute-run")
+    monkeypatch.setenv("NTFY_NOTIFY_RUN", "true")
+    get_settings.cache_clear()
+    run_migrations()
+    _mock_happy_path()
+    respx.post("https://ntfy.sh/warroute-run").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+
+    result = await ingest(FIXTURE)
+    assert result.session_id is not None  # ingest succeeded despite ntfy failure
+    assert isinstance(result.wigle, WigleUploadResult)
+    assert isinstance(result.wdgowars, WdgowarsUploadResult)
+
+
+@respx.mock
+async def test_ingest_ntfy_click_url_uses_web_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NTFY_TOPIC", "warroute-run")
+    monkeypatch.setenv("WEB_BASE_URL", "https://warroute.example.com")
+    get_settings.cache_clear()
+    run_migrations()
+    _mock_happy_path()
+    ntfy_route = respx.post("https://ntfy.sh/warroute-run").mock(
+        return_value=httpx.Response(200)
+    )
+
+    result = await ingest(FIXTURE)
+    sent = ntfy_route.calls.last.request
+    assert sent.headers["Click"] == f"https://warroute.example.com/runs/{result.session_id}"

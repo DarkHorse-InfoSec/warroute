@@ -19,7 +19,7 @@ Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 
 - [x] `uv run ruff check .` clean
 - [x] `uv run mypy warroute` clean (8 source files)
 - [x] `uv run pytest` green (8/8 passed)
-- [ ] First commit on `main` (awaiting Domenic's go-ahead)
+- [x] First commit on `main` (shipped; project is on `feature/phase-4-web-ui` with Phases 1-4 merged)
 
 ## Phase 0 acceptance
 
@@ -94,9 +94,26 @@ Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 
 
 ---
 
-## Remaining (post-v1)
+## Phase 5 - Push notifications (DONE, run-complete only; plan + quota toggles for future)
 
-- [ ] Live verification: real wardrive run, real ORS plan, real WDGoWars upload
-- [ ] Phase 5 (PLAN.md §3.5): push notifications via ntfy.sh on run-complete
-- [ ] Hetzner deploy: `infra/bootstrap.sh`, systemd unit for `warroute serve`, Caddy reverse proxy + basic auth
+- [x] `warroute/clients/ntfy.py` - async ntfy.sh client, best-effort (never raises on failure)
+- [x] `config.py` settings: `NTFY_TOPIC`, `NTFY_BASE_URL` (default https://ntfy.sh), `NTFY_AUTH_TOKEN`, `NTFY_NOTIFY_RUN` (default true), `NTFY_NOTIFY_PLAN` (default false, future), `NTFY_NOTIFY_QUOTA` (default false, future), `WEB_BASE_URL` (for click links)
+- [x] `uploader/orchestrator.py` hook: `_send_run_notification()` fires post-ingest if topic set + toggle on; failure swallowed
+- [x] Tests: 9 new in `test_ntfy_client.py` + 5 new in `test_orchestrator.py`. 137/137 passing total. Ruff + mypy clean.
+- [x] DECISIONS.md entry documenting the togglable design (run-complete v1, plan + quota wired-but-no-op for future)
+- [ ] `.env.example` additions (blocked: Read(./.env.*) deny rule. Domenic to paste 7 lines manually -- see commit message / chat for the snippet)
+- [ ] (Future) Wire plan-complete notification path -- emit from `router/planner.py` after GPX write
+- [ ] (Future) Wire quota-warning watcher -- separate systemd timer job, fires once/day when WiGLE or ORS quota <10%
+- [ ] (Future) Decide whether to point `NTFY_BASE_URL` at self-hosted `ntfy.darkhorseinfosec.com` vs public ntfy.sh for run-summary privacy
+
+## Remaining (post-v1, in priority order)
+
+- [ ] Hetzner deploy: `infra/bootstrap.sh`, systemd unit for `warroute serve`, Caddy reverse proxy + basic auth (writing infra artifacts THIS session; actual deployment deferred to Domenic's go-ahead)
+- [ ] Live precheck CLI scaffolding: `warroute precheck` (writing code + mocked tests THIS session; live execution against real APIs blocked on clean-network)
+
+### Parked for clean-network session (see DECISIONS.md 2026-05-11 TLS interception entry)
+
+These two items cannot safely run from the school PC on the NCSUVT network (Fortinet TLS inspection in path). Defer to a session on MSI at home, or via VPN tunneled off the school network. Re-verify cert chain with `openssl s_client` before resuming.
+
+- [ ] Live verification: real wardrive run, real ORS plan, real WDGoWars upload (requires being in a car AND on a clean network)
 - [ ] Find WDGoWars territory-enumeration endpoint (probe `/api/territory`, `/api/cells`, `/api/gang/{id}` etc.)

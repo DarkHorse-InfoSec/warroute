@@ -31,8 +31,30 @@ class Settings(BaseSettings):
     ors_api_key: str = Field(default="", description="OpenRouteService API key")
     mapbox_api_key: str = Field(default="", description="Mapbox fallback")
 
-    # Notifications (optional)
-    ntfy_topic: str = Field(default="")
+    # Notifications (optional ntfy.sh push notifications)
+    ntfy_topic: str = Field(default="", description="ntfy.sh topic name; empty disables notifications")
+    ntfy_base_url: str = Field(default="https://ntfy.sh", description="ntfy server base; override for self-hosted")
+    ntfy_auth_token: str = Field(default="", description="Bearer token for private ntfy servers; empty for public ntfy.sh")
+    ntfy_notify_run: bool = Field(
+        default=True,
+        description="Send a push when a CSV upload completes (Phase 5 v1 behavior).",
+    )
+    # Future toggles -- wired through settings but not yet emitting.
+    # See DECISIONS.md 2026-05-11 ntfy.sh notifications entry.
+    ntfy_notify_plan: bool = Field(
+        default=False,
+        description="(Future) Send a push when a route plan completes and GPX is ready.",
+    )
+    ntfy_notify_quota: bool = Field(
+        default=False,
+        description="(Future) Send a push when WDGoWars or ORS daily quota drops below 10%.",
+    )
+
+    # Web (for click-through URLs in notifications and external links)
+    web_base_url: str = Field(
+        default="",
+        description="Public WarRoute URL (e.g. https://warroute.darkhorseinfosec.com). Used to build ntfy click links.",
+    )
 
     # Deployment
     hetzner_ip_addr: str = Field(default="")

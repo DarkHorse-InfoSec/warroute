@@ -5,6 +5,53 @@ Append-only. Newest at top.
 
 ---
 
+## 2026-05-11 - Phase 5 notifications: run-complete only in v1; plan + quota toggles wired but no-op
+
+**Question:** PLAN.md §3.5 punts push notifications to v1.1, but Domenic wants them landed now. Should we ship just the run-complete notification (per the PLAN body example) or also wire plan-complete and quota-warning notifications?
+
+**Resolution:** Ship run-complete only in v1. Add `NTFY_NOTIFY_PLAN` (default false) and `NTFY_NOTIFY_QUOTA` (default false) settings to `config.py` as documented toggles, but do NOT wire emit paths for them. When a future PR adds plan-complete and quota-warning emit paths, the settings are already there; flipping them on takes no schema change.
+
+**Why this is fine:**
+- Plan-complete notification is low value when Domenic is at the keyboard planning (which is the normal case). The toggle exists for the rare case where he kicks off a long plan from his phone, leaves, and wants to be pinged when the GPX is ready.
+- Quota-warning notification needs a separate watcher / scheduled job to be useful (warns once per day when WiGLE or ORS drops below 10%). That's a distinct surface (background task, persistent state) not just an extra hook in the orchestrator. Best landed when the hetzner-deploy / systemd timer infrastructure is up.
+- Wiring stub no-op paths now would be dead code; the cleaner pattern is settings-now, emit-later.
+
+**v1 contract:**
+- `NTFY_TOPIC` empty -> notifications disabled (silent skip in `NtfyClient.notify`).
+- `NTFY_TOPIC` set + `NTFY_NOTIFY_RUN=true` (default) -> on every successful CSV ingest, POST to `{NTFY_BASE_URL}/{NTFY_TOPIC}` with body `"+N new APs of M total. WiGLE: ok|failed. WDGoWars: ok|failed|skipped."`, title `"WarRoute: Run #ID"`, tag `car`, priority 3, and click URL `{WEB_BASE_URL}/runs/ID` if `WEB_BASE_URL` is set.
+- Notification failure (transport, 4xx/5xx, timeout) is logged at WARNING and swallowed -- never breaks the ingest.
+- `NTFY_AUTH_TOKEN` enables `Authorization: Bearer` for self-hosted private ntfy servers.
+
+**Open follow-up:** When deploying hetzner infra, decide whether `NTFY_BASE_URL` points at public `https://ntfy.sh` (default) or `https://ntfy.darkhorseinfosec.com` (self-hosted; better for the WDGoWars/WiGLE-leak threat surface since the notification body could carry session metadata). Tracking in tasks/todo.md as a follow-up; default ships pointing at public ntfy.sh.
+
+---
+
+## 2026-05-11 - School-network TLS interception blocks #1 live run + #4 territory probe (no-bypass)
+
+**Question:** Mid-session probe of WDGoWars `/api/me` from the school PC (`domenic.laurenzi` on NCSUVT network) failed with `[SSL: CERTIFICATE_VERIFY_FAILED]`. Was this a stale certifi bundle, an expired cert on the WDGoWars side, or something else?
+
+**Resolution:** Ran `openssl s_client -showcerts` against `wdgwars.pl:443`. Cert chain terminates at:
+
+```
+issuer=C=US, ST=California, L=Sunnyvale, O=Fortinet, OU=Certificate Authority, CN=FG6H0FTB22903890
+```
+
+That is a FortiGate firewall's TLS-inspection certificate (`FG6H0...` is a Fortinet device serial). The NCSUVT network is performing TLS MITM on outbound HTTPS. Confirmed by `curl` (schannel: `SEC_E_UNTRUSTED_ROOT`) — same failure from a separate trust store, so it's the network path, not the local trust store.
+
+**Decision:**
+1. **No-bypass-verify, ever.** Setting `verify=False` (httpx) or `--insecure` (curl) would let WIGLE_TOKEN / WDGOWARS_TOKEN / ORS_API_KEY transit through the Fortinet device in plaintext. This is a literal Rule #1 violation (never let a secret reach output / a logging endpoint). The 2-line fix is exactly what the inspection device wants.
+2. **Defer token-transmitting work to a clean network.** #4 (WDGoWars territory endpoint probe) and #1 (live precheck + live drive verification) cannot safely run from this machine on this network. To be run from MSI (home, clean) or via a VPN tunnel off the school net.
+3. **Token leak status: zero on this run.** Python's default secure-by-default SSL behavior aborted the handshake before the HTTP request body went out; the token never crossed the wire. No rotation needed unless a real-API command was run from this network in a prior session (none recorded — Phase 1-4 work used respx mocks, only `coverage probe-wdgowars` and the planner against real APIs could have leaked, and per git log those were authored on MSI before this session).
+4. **Continue offline-safe work on this machine.** Phase 5 (ntfy.sh) code + tests with mocks, Hetzner infra artifacts (no execution), precheck CLI scaffolding with respx-mocked tests, docs.
+
+**Why this is fine:** Three of the four post-v1 items have substantial offline-safe code surface. The two blocked items (probe, live drive) require Domenic to physically be on a different network anyway — the drive itself is from home, not the school PC. Parking those for a clean-network session costs zero schedule.
+
+**Open follow-up:** When on a clean network, run `openssl s_client -showcerts -servername wdgwars.pl -connect wdgwars.pl:443` first. If the chain terminates at a real public CA (Let's Encrypt, DigiCert, etc.), proceed. If it's still Fortinet/any-vendor-CA, the VPN isn't routing this traffic out the tunnel — fix that before transmitting any token.
+
+**Generalized lesson:** Saved to global memory as `feedback_verify_tls_chain_before_sending_tokens.md`. Future sessions on any non-home network must cert-chain-check before authenticated HTTPS.
+
+---
+
 ## 2026-05-11 - WDGoWars auth is `X-API-Key`, not `Authorization: Bearer`
 
 **Question:** First probe of `/api/me` against the real account 401'd. We had assumed Bearer auth based on PLAN.md.
