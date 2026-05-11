@@ -1,6 +1,17 @@
 # WarRoute - Active TODO
 
-Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 (push notifications) remain.
+Current phase: **v1 code-complete.** All five PLAN.md phases shipped + post-v1 code (precheck, infra artifacts) landed. Remaining: live verification, Hetzner deploy execution, WDGoWars territory probe -- all parked until Domenic is on a clean network (not the school PC's NCSUVT Fortinet network).
+
+### Session 2026-05-11 outcome
+
+Three commits on `feature/phase-4-web-ui`:
+- `077ec8a` feat(notifications): phase 5 ntfy.sh push on run-complete
+- `a69f91e` feat(infra): hetzner deploy artifacts (bootstrap + systemd + Caddyfile + runbook)
+- `1eac54c` feat(precheck): pre-drive sanity harness (warroute precheck)
+
+Also recorded a security finding: school-PC NCSUVT network is TLS-intercepted by a FortiGate device (`CN=FG6H0FTB22903890`). See `DECISIONS.md` for the no-bypass-verify reasoning. Token leak status: zero (Python aborted the handshake before transmission).
+
+Test count: 123 -> 156 (+33: 14 ntfy + 19 precheck).
 
 ## Phase 0 - Bootstrap
 
@@ -114,9 +125,13 @@ Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 
 - [x] `infra/README.md` - 10-section runbook: pre-flight (DNS, SSH, snapshot), bootstrap, ufw setup, repo clone, secrets at /etc/warroute/warroute.env, Caddy password generation, systemd enable, external verification, Syncthing pointer, rollback, ops notes
 - [ ] EXECUTE: actual deployment to 5.161.250.8 (deferred; Domenic's go-ahead required + must be on clean network per Fortinet finding)
 
-## Remaining (post-v1)
+## Pre-drive sanity harness (DONE, code shipped; live execution parked)
 
-- [ ] Live precheck CLI scaffolding: `warroute precheck` (writing code + mocked tests THIS session; live execution against real APIs blocked on clean-network)
+- [x] `warroute/precheck.py` - four health checks: WIGLE auth (search_bbox at home), WDGoWars (/api/me + quota headroom), ORS (2-point directions call), filesystem (SPOOL_DIR + GPX_OUT_DIR writability). External checks run concurrently via asyncio.gather.
+- [x] `CheckResult` dataclass with status (ok|warn|fail), detail, and actionable hint. `verdict()` helper for overall.
+- [x] CLI: `warroute precheck` with colored per-check output and exit code (0=PASS, 1=WARN, 2=FAIL). Chainable into shell scripts and phone shortcuts.
+- [x] Tests: 19 new in `test_precheck.py` with respx mocks covering each check's happy/warn/fail paths plus the run_all() verdict logic. 156/156 total passing. Ruff + mypy clean.
+- [ ] LIVE EXECUTION: parked until clean network (must NOT run from school PC on NCSUVT Fortinet network -- tokens transit the inspection device).
 
 ### Parked for clean-network session (see DECISIONS.md 2026-05-11 TLS interception entry)
 
