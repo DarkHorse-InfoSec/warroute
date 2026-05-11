@@ -113,7 +113,10 @@ def cells_in_radius(home_lat: float, home_lon: float, radius_km: float) -> list[
                 ne_lat=sw_lat + GRID_LAT_STEP,
                 ne_lon=sw_lon + GRID_LON_STEP,
             )
-            if _km_between(home_lat, home_lon, candidate.center_lat, candidate.center_lon) <= radius_km:
+            if (
+                _km_between(home_lat, home_lon, candidate.center_lat, candidate.center_lon)
+                <= radius_km
+            ):
                 cells.append(candidate)
             sw_lon += GRID_LON_STEP
         sw_lat += GRID_LAT_STEP

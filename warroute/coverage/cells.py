@@ -29,10 +29,7 @@ class CellRow:
 
 def upsert_grid(conn: sqlite3.Connection, cells: Iterable[Cell]) -> int:
     """Insert any cells from `cells` not already present. Returns inserted count."""
-    rows = [
-        (cell.id, cell.center_lat, cell.center_lon, cell.bbox_geojson())
-        for cell in cells
-    ]
+    rows = [(cell.id, cell.center_lat, cell.center_lon, cell.bbox_geojson()) for cell in cells]
     if not rows:
         return 0
     cursor = conn.executemany(

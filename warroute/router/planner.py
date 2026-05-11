@@ -69,8 +69,8 @@ class PlanResult:
     request: PlanRequest
     chosen_cells: list[CellScore]
     ordered_waypoints: list[Waypoint]
-    leg: RouteLeg                         # ORS optimization summary (or directions if attached)
-    geometry: object | None = None        # GeoJSON LineString from /directions
+    leg: RouteLeg  # ORS optimization summary (or directions if attached)
+    geometry: object | None = None  # GeoJSON LineString from /directions
     estimated_new_aps: int = 0
     planned_route_id: int | None = None
     drops_for_slack: list[str] = field(default_factory=list)
@@ -144,15 +144,14 @@ def _candidate_cells(request: PlanRequest) -> list[CellScore]:
     """All scored cells whose center is within the reachable radius of home."""
     radius_km = request.reachable_radius_km()
     if radius_km <= 0:
-        raise PlannerError(
-            f"duration_min={request.duration_min} yields zero reachable radius"
-        )
+        raise PlannerError(f"duration_min={request.duration_min} yields zero reachable radius")
 
     with transaction() as conn:
         all_rows = cells_dal.all_cells(conn)
     scored = rank_cells(all_rows)
     in_range = [
-        s for s in scored
+        s
+        for s in scored
         if _km_between(request.home_lat, request.home_lon, s.center_lat, s.center_lon) <= radius_km
         and s.ownership != "me"  # don't waste a slot on cells we already own
     ]
@@ -170,9 +169,7 @@ async def _solve_with_backoff(
     """Call /optimization; if over budget, drop the lowest-scoring cell and retry."""
     budget_s = request.duration_min * 60 * (1 + DURATION_SLACK)
     while len(chosen) >= MIN_WAYPOINTS:
-        jobs = [
-            Waypoint(c.center_lat, c.center_lon, label=c.cell_id) for c in chosen
-        ]
+        jobs = [Waypoint(c.center_lat, c.center_lon, label=c.cell_id) for c in chosen]
         leg = await ors.optimize(start=home, jobs=jobs, end=end)
         if leg.duration_s <= budget_s:
             # Reorder chosen to match ORS's optimized job ordering.
@@ -200,12 +197,7 @@ def _persist_plan(
 ) -> int:
     import json
 
-    payload = json.dumps(
-        [
-            {"lat": w.lat, "lon": w.lon, "label": w.label}
-            for w in waypoints
-        ]
-    )
+    payload = json.dumps([{"lat": w.lat, "lon": w.lon, "label": w.label} for w in waypoints])
     with transaction() as conn:
         cursor = conn.execute(
             """

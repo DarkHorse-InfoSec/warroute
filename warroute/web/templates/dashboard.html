@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{% if model.wdgowars_error %}
+  <div class="flash warn">
+    WDGoWars unreachable: {{ model.wdgowars_error }}
+  </div>
+{% endif %}
+
+<div class="cards">
+  {% if model.player %}
+    <div class="card">
+      <div class="label">Player</div>
+      <div class="value">{{ model.player.username }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Total entities</div>
+      <div class="value">{{ "{:,}".format(model.player.total) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">WiFi APs</div>
+      <div class="value">{{ "{:,}".format(model.player.wifi) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Today</div>
+      <div class="value">+{{ "{:,}".format(model.player.recent_today) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Quota left today</div>
+      {% set q = model.player.daily_quota_remaining or 0 %}
+      <div class="value">
+        {{ "{:,}".format(q) }}
+        {% if q < 1000 %}<span class="badge bad">low</span>{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="label">Player</div>
+      <div class="value muted">offline</div>
+    </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="label">Cells in radius</div>
+    <div class="value">{{ model.cells_total }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Owned by me</div>
+    <div class="value">{{ model.cells_owned_by_me }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Density refreshed</div>
+    <div class="value">{{ model.cells_with_density }}</div>
+  </div>
+</div>
+
+<h2>Recent runs</h2>
+{% if model.recent_runs %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Source</th>
+      <th>Started</th>
+      <th>APs</th>
+      <th>New</th>
+      <th>WiGLE</th>
+      <th>WDGoWars</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in model.recent_runs %}
+    <tr>
+      <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+      <td>{{ run.source }}</td>
+      <td>{{ run.started_at.split('T')[0] if 'T' in (run.started_at|string) else run.started_at }}</td>
+      <td>{{ run.total_aps or 0 }}</td>
+      <td>{{ run.new_aps or 0 }}</td>
+      <td>
+        {% if run.uploaded_wigle_at %}<span class="badge good">ok</span>{% else %}<span class="badge bad">no</span>{% endif %}
+      </td>
+      <td>
+        {% if run.uploaded_wdgowars_at %}<span class="badge good">ok</span>{% else %}<span class="badge bad">no</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No runs ingested yet. Drop a CSV into the spool dir, or run <code>warroute upload &lt;file&gt;</code>.</p>
+{% endif %}
+
+<h2>Next moves</h2>
+<p>
+  <a class="btn" href="/plan">Plan a drive</a>
+  <a class="btn secondary" href="/coverage">View coverage map</a>
+</p>
+{% endblock %}

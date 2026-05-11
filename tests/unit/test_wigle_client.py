@@ -64,9 +64,7 @@ async def test_search_bbox_raises_on_429() -> None:
 @respx.mock
 async def test_search_bbox_raises_on_success_false() -> None:
     respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": False, "message": "quota exceeded"}
-        )
+        return_value=httpx.Response(200, json={"success": False, "message": "quota exceeded"})
     )
     async with WigleClient() as wigle:
         with pytest.raises(WigleError, match="success=false"):

@@ -58,9 +58,9 @@ class PlayerState:
     """
 
     username: str
-    total: int           # total entities discovered (was previously called `points`)
-    wifi: int            # WiFi APs only
-    ble: int             # BLE devices
+    total: int  # total entities discovered (was previously called `points`)
+    wifi: int  # WiFi APs only
+    ble: int  # BLE devices
     recent_today: int
     daily_quota_remaining: int | None
     owned_cell_ids: list[str]
@@ -117,9 +117,7 @@ class WdgowarsClient:
         if resp.status_code == 429:
             raise WdgowarsQuotaError(f"WDGoWars rate-limit/quota at {path}")
         if resp.status_code >= 400:
-            raise WdgowarsError(
-                f"WDGoWars HTTP {resp.status_code} at {path}: {resp.text[:200]}"
-            )
+            raise WdgowarsError(f"WDGoWars HTTP {resp.status_code} at {path}: {resp.text[:200]}")
         return resp
 
     async def me(self) -> PlayerState:

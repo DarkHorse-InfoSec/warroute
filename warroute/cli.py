@@ -18,7 +18,9 @@ app = typer.Typer(
     help="Wardriving route planner and dual-uploader.",
     no_args_is_help=True,
 )
-coverage_app = typer.Typer(name="coverage", help="Cell ownership + AP density.", no_args_is_help=True)
+coverage_app = typer.Typer(
+    name="coverage", help="Cell ownership + AP density.", no_args_is_help=True
+)
 app.add_typer(coverage_app, name="coverage")
 console = Console()
 
@@ -76,15 +78,15 @@ def coverage_refresh(
     from warroute.coverage.sync import refresh
 
     run_migrations()
-    summary = asyncio.run(
-        refresh(home_lat=home_lat, home_lon=home_lon, radius_km=radius_km)
-    )
+    summary = asyncio.run(refresh(home_lat=home_lat, home_lon=home_lon, radius_km=radius_km))
     console.print(f"Cells in radius:     {summary.cells_total}")
     console.print(f"  newly painted:     {summary.cells_inserted}")
     console.print(f"  density refreshed: {summary.cells_density_refreshed}")
     console.print(f"  density failed:    {summary.cells_density_failed}")
     if summary.wdgowars_synced:
-        console.print(f"WDGoWars: [green]synced[/green]  owned-by-me cells: {summary.cells_owned_by_me}")
+        console.print(
+            f"WDGoWars: [green]synced[/green]  owned-by-me cells: {summary.cells_owned_by_me}"
+        )
     else:
         console.print(f"WDGoWars: [yellow]skipped[/yellow]  ({summary.wdgowars_error})")
 
@@ -219,15 +221,31 @@ def plan(
     )
     out_path.write_text(gpx_xml, encoding="utf-8")
 
-    console.print(f"[green]Plan {result.planned_route_id}[/green]: "
-                  f"{len(result.chosen_cells)} cells, "
-                  f"~{result.estimated_new_aps} new APs, "
-                  f"{result.estimated_drive_min:.1f} min, "
-                  f"{result.leg.distance_km:.1f} km")
+    console.print(
+        f"[green]Plan {result.planned_route_id}[/green]: "
+        f"{len(result.chosen_cells)} cells, "
+        f"~{result.estimated_new_aps} new APs, "
+        f"{result.estimated_drive_min:.1f} min, "
+        f"{result.leg.distance_km:.1f} km"
+    )
     if result.drops_for_slack:
         console.print(f"  Dropped to fit budget: {len(result.drops_for_slack)} cells")
     console.print(f"  GPX: {out_path}")
     console.print(f"  Maps: {google_maps_url(result.ordered_waypoints)}")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address. Use 0.0.0.0 to expose on LAN."),
+    port: int = typer.Option(8000, help="Port"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev only)"),
+) -> None:
+    """Start the FastAPI web UI."""
+    import uvicorn
+
+    run_migrations()
+    console.print(f"[green]WarRoute serving on http://{host}:{port}[/green]")
+    uvicorn.run("warroute.web.app:app", host=host, port=port, reload=reload, log_level="info")
 
 
 @coverage_app.command("probe-wdgowars")

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Coverage{% endblock %}
+{% block content %}
+<h1>Coverage</h1>
+<p style="color: var(--muted);">
+  Home {{ "%.4f"|format(home_lat) }}, {{ "%.4f"|format(home_lon) }} &middot;
+  radius {{ "%.0f"|format(radius_km) }} km
+</p>
+
+<div id="map" data-home-lat="{{ home_lat }}" data-home-lon="{{ home_lon }}"></div>
+
+<div class="legend">
+  <span><span class="swatch" style="background: var(--owner-me);"></span>Mine</span>
+  <span><span class="swatch" style="background: var(--owner-rival);"></span>Rival</span>
+  <span><span class="swatch" style="background: var(--owner-uncaptured);"></span>Uncaptured</span>
+  <span><span class="swatch" style="background: var(--muted);"></span>No data</span>
+</div>
+
+<p style="color: var(--muted); font-size: 13px; margin-top: 1rem;">
+  Run <code>warroute coverage refresh</code> to (re)paint the grid and pull WiGLE density.
+</p>
+
+<script>
+window.addEventListener("DOMContentLoaded", function () {
+  var el = document.getElementById("map");
+  var homeLat = parseFloat(el.dataset.homeLat);
+  var homeLon = parseFloat(el.dataset.homeLon);
+
+  var map = L.map("map").setView([homeLat, homeLon], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  L.circleMarker([homeLat, homeLon], {
+    radius: 6, color: "#0e0f12", weight: 2, fillColor: "#22d3ee", fillOpacity: 1
+  }).bindPopup("Home").addTo(map);
+
+  function styleFor(feature) {
+    var ownership = feature.properties.ownership;
+    var color = "#8a929d";
+    if (ownership === "me") color = "#4ade80";
+    else if (ownership === "rival") color = "#f87171";
+    else if (ownership === "uncaptured") {
+      color = feature.properties.estimated_aps !== null ? "#facc15" : "#8a929d";
+    }
+    return { color: color, weight: 1, fillColor: color, fillOpacity: 0.25 };
+  }
+
+  fetch("/coverage/cells.geojson").then(function (r) { return r.json(); }).then(function (gj) {
+    if (!gj.features.length) { return; }
+    var layer = L.geoJSON(gj, {
+      style: styleFor,
+      onEachFeature: function (feature, lyr) {
+        var p = feature.properties;
+        lyr.bindPopup(
+          "<b>" + p.id + "</b><br>"
+          + "Owner: " + (p.owner || "uncaptured") + "<br>"
+          + "Est APs: " + (p.estimated_aps != null ? p.estimated_aps : "?") + "<br>"
+          + "Refreshed: " + (p.last_refreshed || "never")
+        );
+      }
+    }).addTo(map);
+    map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+  });
+});
+</script>
+{% endblock %}

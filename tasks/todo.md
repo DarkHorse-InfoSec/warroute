@@ -1,8 +1,6 @@
 # WarRoute - Active TODO
 
-Current phase: **Phase 2 (coverage analyzer)** - per Domenic's 2026-05-10 direction to skip the dual-uploader for now.
-
-> Note: PLAN.md sequencing was Phase 1 (uploader) -> Phase 2 (coverage). Phase 1 will be revisited once Domenic decides whether to go fully automated upload or stay manual.
+Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 (push notifications) remain.
 
 ## Phase 0 - Bootstrap
 
@@ -81,6 +79,24 @@ Current phase: **Phase 2 (coverage analyzer)** - per Domenic's 2026-05-10 direct
 
 ---
 
-## Phase 4 - Mobile-friendly UI (next)
+## Phase 4 - Mobile-friendly UI (DONE)
 
-Pages: `/`, `/plan`, `/coverage`, `/runs/<id>`, `/settings`. FastAPI + Jinja2 + HTMX + Leaflet. HTTP basic auth at Caddy layer. See `PLAN.md` §3.4.
+- [x] FastAPI app factory with lifespan handler (no on_event deprecation)
+- [x] Base layout: HTMX + Leaflet via CDN, mobile dark theme, sticky topbar nav
+- [x] `/` dashboard - WDGoWars player card, recent-runs table, cell counts
+- [x] `/plan` form (GET) + planner result (POST) with Leaflet map, GMaps deep-link, GPX download
+- [x] `/coverage` - Leaflet map of all cells colored by ownership, GeoJSON feed
+- [x] `/runs/{id}` - session breakdown + predicted vs actual when a plan is associated
+- [x] `/settings` - read-only display, secret values masked to last4 only
+- [x] CLI: `warroute serve [--host --port --reload]`
+- [x] 123/123 tests passing, ruff + mypy clean
+- [x] Smoke-tested live: all 5 routes + GeoJSON endpoint return 200
+
+---
+
+## Remaining (post-v1)
+
+- [ ] Live verification: real wardrive run, real ORS plan, real WDGoWars upload
+- [ ] Phase 5 (PLAN.md §3.5): push notifications via ntfy.sh on run-complete
+- [ ] Hetzner deploy: `infra/bootstrap.sh`, systemd unit for `warroute serve`, Caddy reverse proxy + basic auth
+- [ ] Find WDGoWars territory-enumeration endpoint (probe `/api/territory`, `/api/cells`, `/api/gang/{id}` etc.)

@@ -77,7 +77,9 @@ async def test_ingest_continues_when_wigle_fails() -> None:
     run_migrations()
     respx.post(WIGLE_API_BASE + WIGLE_UPLOAD).mock(return_value=httpx.Response(500))
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
-        return_value=httpx.Response(200, json={"username": "x", "points": 0, "daily_quota_remaining": 10000})
+        return_value=httpx.Response(
+            200, json={"username": "x", "points": 0, "daily_quota_remaining": 10000}
+        )
     )
     respx.post(WDGOWARS_API_BASE + WDG_UPLOAD).mock(
         return_value=httpx.Response(200, json={"run_id": "r-1"})

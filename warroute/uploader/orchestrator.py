@@ -108,9 +108,7 @@ async def _safe_wdgowars(csv_path: Path, new_aps: int) -> WdgowarsUploadResult |
 
 def _existing_session(sha256: str) -> int | None:
     with transaction() as conn:
-        row = conn.execute(
-            "SELECT id FROM sessions WHERE csv_sha256 = ?", (sha256,)
-        ).fetchone()
+        row = conn.execute("SELECT id FROM sessions WHERE csv_sha256 = ?", (sha256,)).fetchone()
     return int(row["id"]) if row else None
 
 

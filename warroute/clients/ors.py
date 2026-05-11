@@ -171,10 +171,7 @@ class OrsClient:
             )
         end_wp = end or start
         body: dict[str, Any] = {
-            "jobs": [
-                {"id": idx, "location": w.to_lon_lat()}
-                for idx, w in enumerate(jobs)
-            ],
+            "jobs": [{"id": idx, "location": w.to_lon_lat()} for idx, w in enumerate(jobs)],
             "vehicles": [
                 {
                     "id": 1,

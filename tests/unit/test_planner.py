@@ -40,8 +40,12 @@ def test_plan_request_reachable_radius_for_loop() -> None:
 
 def test_plan_request_reachable_radius_for_oneway() -> None:
     req = PlanRequest(
-        home_lat=44.94, home_lon=-72.21, duration_min=60, mode="oneway",
-        destination_lat=45.0, destination_lon=-72.0,
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="oneway",
+        destination_lat=45.0,
+        destination_lon=-72.0,
     )
     assert req.reachable_radius_km() == pytest.approx(DEFAULT_AVG_SPEED_KMH)
 

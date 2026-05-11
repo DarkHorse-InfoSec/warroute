@@ -23,43 +23,52 @@ Follow the Boris Cherny method documented in the global `~/.claude/CLAUDE.md`. P
 ## Directory Structure
 
 ```
-warroute/                    # Python package
+warroute/                          # Python package
   __init__.py
-  config.py                  # pydantic-settings, loads .env
-  db.py                      # SQLite helpers
-  cli.py                     # typer CLI entrypoint
-  uploader/                  # Phase 1: dual-uploader
-    parser.py
-    wigle.py
-    wdgowars.py
-    watcher.py
-  coverage/                  # Phase 2: cell ownership / density
-    wdgowars_sync.py
-    local.py
-    grid.py
-  router/                    # Phase 3: route planner
-    ors_client.py            # OpenRouteService HTTP client
-    scorer.py
-    planner.py
-  web/                       # Phase 4: FastAPI app + HTMX templates
-    app.py
-    templates/
-    static/
-migrations/                  # SQL migration files (_v1.sql, _v2.sql, ...)
-infra/                       # bootstrap.sh, systemd units, Caddyfile
+  config.py                        # pydantic-settings, loads .env
+  db.py                            # SQLite helpers (+ migration runner)
+  cli.py                           # typer CLI entrypoint
+  clients/                         # shared HTTP clients (used by uploader, coverage, router)
+    wigle.py                       # WiGLE.net search; throttled to 1 req/sec
+    wdgowars.py                    # WDGoWars; X-API-Key auth (NOT Bearer)
+    ors.py                         # OpenRouteService (worldwide routing)
+  uploader/                        # Phase 1: dual-uploader
+    parser.py                      # WigleWifi-1.6 CSV parser, sha256 dedup
+    wigle_upload.py                # POST /api/v2/file/upload
+    wdgowars_upload.py             # quota pre-flight + POST /api/upload-csv
+    orchestrator.py                # parse + parallel uploads + DB writes
+    watcher.py                     # watchdog daemon on SPOOL_DIR
+  coverage/                        # Phase 2: cell ownership / density
+    grid.py                        # 2x3 km aligned grid, haversine clipping
+    cells.py                       # SQLite DAL
+    sync.py                        # paint grid + WDGoWars + WiGLE refresh
+    report.py                      # text summary
+  router/                          # Phase 3: route planner
+    scorer.py                      # native scoring (WDGoWars value x WiGLE density)
+    planner.py                     # greedy pick + ORS optimize + back-off
+    gpx.py                         # GPX 1.1 + Google Maps multi-stop URL
+  web/                             # Phase 4: FastAPI + HTMX + Leaflet
+    app.py                         # app factory with lifespan handler
+    templating.py                  # Jinja2 helper
+    routes/                        # one file per page (dashboard, plan, coverage, runs, settings)
+    templates/                     # base.html + per-page templates
+    static/                        # app.css (mobile-first dark theme)
+migrations/                        # SQL migration files (_v1.sql, _v2.sql, ...)
+infra/                             # bootstrap.sh, systemd units, Caddyfile (TBD)
 tests/
-  fixtures/
-  unit/
-  integration/               # gated by RUN_INTEGRATION=1
+  fixtures/                        # sample_wiglewifi.csv etc.
+  unit/                            # all current tests; mocked external calls via respx
+  integration/                     # gated by RUN_INTEGRATION=1
 tasks/
-  todo.md
-  lessons.md
-PLAN.md                      # canonical design spec
+  todo.md                          # active work / phase status
+  lessons.md                       # patterns learned from corrections
+PLAN.md                            # canonical design spec
+DECISIONS.md                       # architectural forks + their resolutions (newest at top)
 README.md
-CLAUDE.md                    # this file
-.env                         # SECRETS - never commit
+CLAUDE.md                          # this file
+.env                               # SECRETS - never commit (gitignored)
 .env.example
-pyproject.toml               # deps via uv
+pyproject.toml                     # deps via uv
 ```
 
 ## Key Files & Paths
@@ -67,22 +76,32 @@ pyproject.toml               # deps via uv
 | File/Dir | Purpose |
 |----------|---------|
 | `PLAN.md` | Canonical design + build phases. Read first if you forget anything. |
+| `DECISIONS.md` | Architectural forks + resolutions (newest at top). Includes the WDGoWars `X-API-Key` discovery, the OSRM-to-OpenRouteService swap, and the phase-ordering reversal. |
 | `.env` | Secrets (WIGLE, WDGOWARS, ORS keys + Hetzner IP). **Gitignored.** |
 | `migrations/_v1.sql` | Initial SQLite schema (sessions, observations, cells, planned_routes). |
-| `tasks/todo.md` | Active work for the current phase. |
+| `tasks/todo.md` | Active work + phase status. |
 | `tasks/lessons.md` | Patterns learned from corrections. Update after every redirect. |
 
 ## Environment & Commands
 
 ```bash
 uv sync --all-extras                                  # install deps
-uv run pytest                                         # tests
+uv run pytest                                         # tests (currently 100+; respx mocks externals)
 uv run ruff check .                                   # lint
 uv run ruff format .                                  # format
 uv run mypy warroute                                  # type check (strict)
 uv run warroute --help                                # CLI
-uv run uvicorn warroute.web.app:app --reload         # dev server (Phase 4+)
+uv run warroute serve                                 # web UI on http://127.0.0.1:8000
+uv run warroute serve --host 0.0.0.0 --reload         # dev: bind LAN, auto-reload
 RUN_INTEGRATION=1 uv run pytest tests/integration    # real-API tests (rare)
+```
+
+### Windows footgun
+
+Git Bash on Windows mangles Unix-style path arguments (e.g. `/api/me` -> `C:/Program Files/Git/api/me`). Prefix with `MSYS_NO_PATHCONV=1` for any CLI call that passes a Unix-looking path:
+
+```bash
+MSYS_NO_PATHCONV=1 uv run warroute coverage probe-wdgowars /api/me
 ```
 
 ## Environment Variables (.env, never commit)
@@ -140,10 +159,16 @@ Branch naming: `feature/`, `fix/`, `refactor/`, `hotfix/`. Never push to `main` 
 
 ## Known Issues & Gotchas
 
-- WiGLE.net query API is rate-limited (1 req/sec free tier). Cell density lookups must be cached for 24h in SQLite.
-- WDGoWars caps new APs at 20k per 24h per account. The uploader checks `/api/me` headroom before posting and splits oversized CSVs.
-- ORS free tier: 2000 directions/day, 500 optimization/day. Watch quota on multi-plan days; fall back to Mapbox if exceeded.
-- WDGoWars is an early-stage service; API endpoints may change. Pin endpoints, monitor changelog, keep the client thin.
+- **WDGoWars auth is `X-API-Key`, NOT `Authorization: Bearer`.** Empirically probed 2026-05-11; Bearer/Token/raw all 401. See `DECISIONS.md` for the discovery + the full `/api/me` response shape.
+- **`/api/me` does NOT return owned-cell IDs.** Only `reinforce: {zoom_level: count}` aggregates. The `cells.wdgowars_owner` column stays mostly NULL until we find the territory-enumeration endpoint (TBD; candidates: `/api/territory`, `/api/cells`, `/api/gang/{id}`).
+- **WDGoWars `/api/me` has no `daily_quota_remaining`.** Derived as `20000 - recent_today` (the cap from PLAN.md §3.1).
+- **Don't `payload.get(a) or payload.get(b)` for numeric/boolean fields.** Python `or` returns first *truthy*, not first non-`None`. Caused a real WDGoWars quota-bypass bug. Use the `_first_present(payload, *keys)` helper in `clients/wdgowars.py`.
+- **`sqlite3.PARSE_DECLTYPES` chokes on ISO-T timestamps.** Removed from `db.connect()`. We parse timestamps manually elsewhere.
+- WiGLE.net query API is rate-limited (1 req/sec free tier). Cell density lookups cached for 24h in SQLite.
+- WDGoWars caps new APs at 20k per 24h per account. The uploader checks `/api/me` headroom (`recent_today` field) before posting; if the CSV would overflow, it raises `WdgowarsQuotaSkip` (logged but doesn't fail the run).
+- ORS free tier: 2000 directions/day, 500 optimization/day. Watch quota on multi-plan days; Mapbox fallback wired but not yet implemented.
+- WDGoWars is early-stage; pin endpoints, monitor changelog, keep the client thin.
+- **Windows + Git Bash mangles `/path/like/this` CLI args** into `C:/Program Files/Git/path/like/this`. Prefix with `MSYS_NO_PATHCONV=1`.
 
 ---
 
@@ -151,10 +176,10 @@ Branch naming: `feature/`, `fix/`, `refactor/`, `hotfix/`. Never push to `main` 
 
 | Service | Purpose | Auth | Notes |
 |---------|---------|------|-------|
-| WiGLE.net | AP database + density queries + CSV upload | `WIGLE_NAME` + `WIGLE_TOKEN` | 1 req/sec free tier |
-| WDGoWars | Game state, territory, CSV upload | `WDGOWARS_TOKEN` (Bearer) | 20k AP/day cap |
-| OpenRouteService | Routing + TSP optimization | `ORS_API_KEY` | 2000 dir/day, 500 opt/day free |
-| Mapbox Directions | Routing fallback | `MAPBOX_API_KEY` (optional) | Used only when ORS fails |
+| WiGLE.net | AP database + density queries + CSV upload | HTTP Basic: `WIGLE_NAME` + `WIGLE_TOKEN` | 1 req/sec free tier |
+| WDGoWars | Game state, territory, CSV upload | `X-API-Key: WDGOWARS_TOKEN` header | 20k AP/day cap |
+| OpenRouteService | Routing + TSP optimization | Raw key in `Authorization` header (no `Bearer`) | 2000 dir/day, 500 opt/day free |
+| Mapbox Directions | Routing fallback | `MAPBOX_API_KEY` (optional) | Wired in env, not yet used |
 | Hetzner CPX | Prod hosting | SSH key | `5.161.250.8`, `warroute.darkhorseinfosec.com` |
 
 ---

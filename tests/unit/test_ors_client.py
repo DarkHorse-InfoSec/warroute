@@ -60,8 +60,10 @@ async def test_directions_sends_lon_lat_order() -> None:
 
     body = route.calls.last.request.read().decode()
     # ORS expects [lon, lat] per coordinate; ensure we're not flipping.
-    assert '"coordinates": [[-72.21, 44.94], [-72.18, 44.96]]' in body or \
-           '"coordinates":[[-72.21,44.94],[-72.18,44.96]]' in body
+    assert (
+        '"coordinates": [[-72.21, 44.94], [-72.18, 44.96]]' in body
+        or '"coordinates":[[-72.21,44.94],[-72.18,44.96]]' in body
+    )
 
 
 @respx.mock

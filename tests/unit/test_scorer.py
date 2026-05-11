@@ -61,10 +61,10 @@ def test_score_treats_missing_density_as_zero() -> None:
 
 def test_rank_cells_sorts_descending_and_skips_no_density() -> None:
     rows = [
-        _row("low", aps=5, capture_value=10),       # score 50
+        _row("low", aps=5, capture_value=10),  # score 50
         _row("none", aps=None, capture_value=999),  # excluded
-        _row("high", aps=500, capture_value=10),    # score 5000
-        _row("mid", aps=50, capture_value=10),      # score 500
+        _row("high", aps=500, capture_value=10),  # score 5000
+        _row("mid", aps=50, capture_value=10),  # score 500
     ]
     ranked = rank_cells(rows)
     assert [s.cell_id for s in ranked] == ["high", "mid", "low"]
