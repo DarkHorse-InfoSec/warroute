@@ -158,6 +158,78 @@ def watch(
     run_watcher(spool_dir=target, source=source)
 
 
+@app.command()
+def plan(
+    duration_min: int = typer.Option(90, "--duration", "-d", help="Time budget in minutes"),
+    mode: str = typer.Option("loop", "--mode", "-m", help="loop or oneway"),
+    home_lat: float = typer.Option(None, help="Override HOME_LAT"),
+    home_lon: float = typer.Option(None, help="Override HOME_LON"),
+    destination: str = typer.Option(None, "--destination", help="LAT,LON for oneway mode"),
+    out: str = typer.Option("drive.gpx", "--out", "-o", help="GPX output path"),
+) -> None:
+    """Plan a wardriving route from home, optimized for new-AP yield within the time budget."""
+    from pathlib import Path
+
+    from warroute.router.gpx import google_maps_url, write_gpx
+    from warroute.router.planner import PlannerError, PlanRequest
+    from warroute.router.planner import plan as run_plan
+
+    settings = get_settings()
+    if mode not in ("loop", "oneway"):
+        console.print(f"[red]Invalid --mode '{mode}'; use 'loop' or 'oneway'.[/red]")
+        raise typer.Exit(code=2)
+
+    dest_lat: float | None = None
+    dest_lon: float | None = None
+    if mode == "oneway":
+        if not destination:
+            console.print("[red]oneway mode requires --destination LAT,LON[/red]")
+            raise typer.Exit(code=2)
+        try:
+            dest_lat_s, dest_lon_s = destination.split(",")
+            dest_lat = float(dest_lat_s)
+            dest_lon = float(dest_lon_s)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --destination: {exc}[/red]")
+            raise typer.Exit(code=2) from exc
+
+    request = PlanRequest(
+        home_lat=home_lat if home_lat is not None else settings.home_lat,
+        home_lon=home_lon if home_lon is not None else settings.home_lon,
+        duration_min=duration_min,
+        mode=mode,
+        destination_lat=dest_lat,
+        destination_lon=dest_lon,
+    )
+
+    run_migrations()
+    try:
+        result = asyncio.run(run_plan(request))
+    except PlannerError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gpx_xml = write_gpx(
+        result.ordered_waypoints,
+        track_points=None,
+        name=f"WarRoute {request.duration_min}min {request.mode}",
+        description=f"{len(result.chosen_cells)} cells, ~{result.estimated_new_aps} new APs",
+    )
+    out_path.write_text(gpx_xml, encoding="utf-8")
+
+    console.print(f"[green]Plan {result.planned_route_id}[/green]: "
+                  f"{len(result.chosen_cells)} cells, "
+                  f"~{result.estimated_new_aps} new APs, "
+                  f"{result.estimated_drive_min:.1f} min, "
+                  f"{result.leg.distance_km:.1f} km")
+    if result.drops_for_slack:
+        console.print(f"  Dropped to fit budget: {len(result.drops_for_slack)} cells")
+    console.print(f"  GPX: {out_path}")
+    console.print(f"  Maps: {google_maps_url(result.ordered_waypoints)}")
+
+
 @coverage_app.command("probe-wdgowars")
 def probe_wdgowars(
     path: str = typer.Argument("/api/me", help="WDGoWars API path to GET"),
