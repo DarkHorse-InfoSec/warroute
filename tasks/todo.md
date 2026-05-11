@@ -106,9 +106,16 @@ Current phase: **All five PLAN.md phases shipped.** Live verification + Phase 5 
 - [ ] (Future) Wire quota-warning watcher -- separate systemd timer job, fires once/day when WiGLE or ORS quota <10%
 - [ ] (Future) Decide whether to point `NTFY_BASE_URL` at self-hosted `ntfy.darkhorseinfosec.com` vs public ntfy.sh for run-summary privacy
 
-## Remaining (post-v1, in priority order)
+## Hetzner deploy artifacts (DONE: files in repo, NOT executed on VPS)
 
-- [ ] Hetzner deploy: `infra/bootstrap.sh`, systemd unit for `warroute serve`, Caddy reverse proxy + basic auth (writing infra artifacts THIS session; actual deployment deferred to Domenic's go-ahead)
+- [x] `infra/bootstrap.sh` - idempotent Debian 12 provisioner: apt update, install python3/sqlite3/ufw/fail2ban/Caddy/uv, create warroute user + group + dirs, stage systemd unit, configure (but not enable) ufw
+- [x] `infra/systemd/warroute.service` - systemd unit with hardening (NoNewPrivileges, ProtectSystem=strict, ReadWritePaths scoped to /var/lib/warroute + /var/spool/warroute + /home/warroute/warroute, MemoryDenyWriteExecute, RestrictAddressFamilies, etc.). EnvironmentFile=/etc/warroute/warroute.env
+- [x] `infra/Caddyfile` - TLS auto via Let's Encrypt + basic_auth + reverse_proxy 127.0.0.1:8000 + HSTS/CSP/X-Frame-Options headers + JSON access log
+- [x] `infra/README.md` - 10-section runbook: pre-flight (DNS, SSH, snapshot), bootstrap, ufw setup, repo clone, secrets at /etc/warroute/warroute.env, Caddy password generation, systemd enable, external verification, Syncthing pointer, rollback, ops notes
+- [ ] EXECUTE: actual deployment to 5.161.250.8 (deferred; Domenic's go-ahead required + must be on clean network per Fortinet finding)
+
+## Remaining (post-v1)
+
 - [ ] Live precheck CLI scaffolding: `warroute precheck` (writing code + mocked tests THIS session; live execution against real APIs blocked on clean-network)
 
 ### Parked for clean-network session (see DECISIONS.md 2026-05-11 TLS interception entry)
