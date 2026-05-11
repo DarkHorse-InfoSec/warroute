@@ -1,0 +1,70 @@
+# --- Secrets (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*_rsa
+*_ed25519
+secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.hypothesis/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- uv ---
+# (lockfile uv.lock SHOULD be committed; cache should not)
+.uv-cache/
+
+# --- Local data ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+warroute.db
+data/
+osm-cache/
+gpx-out/
+spool/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Local Claude state ---
+.claude/settings.local.json
