@@ -108,6 +108,56 @@ def coverage_report(
     console.print(format_summary(summary))
 
 
+@app.command()
+def upload(
+    csv_file: str = typer.Argument(..., help="Path to a WigleWifi-1.6 CSV"),
+    source: str = typer.Option("wigle-android", help="Producer label for the sessions row"),
+) -> None:
+    """One-shot ingest: parse, dual-upload to WiGLE + WDGoWars, record session."""
+    from pathlib import Path
+
+    from warroute.uploader.orchestrator import ingest
+
+    path = Path(csv_file)
+    if not path.exists():
+        console.print(f"[red]No such file: {path}[/red]")
+        raise typer.Exit(code=1)
+
+    run_migrations()
+    result = asyncio.run(ingest(path, source=source))
+
+    if result.already_seen:
+        console.print(
+            f"[yellow]Already ingested[/yellow] (session {result.session_id}). "
+            f"sha256={result.csv_sha256[:12]}"
+        )
+        return
+
+    wigle_label = "ok" if hasattr(result.wigle, "success") else result.wigle
+    wdg_label = "ok" if hasattr(result.wdgowars, "success") else result.wdgowars
+    console.print(
+        f"[green]Session {result.session_id}[/green]: "
+        f"{result.total_aps} APs ({result.new_aps} new). "
+        f"WiGLE: {wigle_label}. WDGoWars: {wdg_label}."
+    )
+
+
+@app.command()
+def watch(
+    spool_dir: str = typer.Option(None, help="Override SPOOL_DIR from .env"),
+    source: str = typer.Option("wigle-android", help="Producer label for ingested CSVs"),
+) -> None:
+    """Daemon: watch SPOOL_DIR for new CSVs and ingest them as they arrive."""
+    from pathlib import Path
+
+    from warroute.uploader.watcher import watch as run_watcher
+
+    run_migrations()
+    target = Path(spool_dir) if spool_dir else None
+    console.print("[green]Watching for CSVs[/green]. Ctrl-C to stop.")
+    run_watcher(spool_dir=target, source=source)
+
+
 @coverage_app.command("probe-wdgowars")
 def probe_wdgowars(
     path: str = typer.Argument("/api/me", help="WDGoWars API path to GET"),

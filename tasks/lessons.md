@@ -22,6 +22,20 @@ Updated whenever Domenic corrects an approach or confirms a non-obvious choice.
 **Rule going forward:** Use OpenRouteService API as the routing backend; do not reintroduce self-hosted OSRM. Worldwide OSM extracts (~120 GB, ~32 GB RAM) won't fit on a CPX21 anyway.
 **Why:** Single-user app, but the user travels. Worldwide coverage is a requirement, not a stretch goal.
 
+### 2026-05-10 - Phase ordering is canonical, never skip
+
+**Trigger:** Domenic said "After [commit] move onto Phase 2." I interpreted as "skip Phase 1." He had told me earlier (in a /btw I missed) NOT to skip phases.
+**Correction:** Build PLAN.md phases strictly in numeric order.
+**Rule going forward:** "Move onto Phase N" means continue the sequence, not skip ahead. If user names a phase, verify it's the next un-built phase; if not, ask before skipping.
+**Why:** Skipping Phase 1 caused Phase 2 and Phase 3 PRs to land before Phase 1, creating awkward branch dependencies. The repair cost (rebuilding Phase 1 on top of Phase 2 retroactively) far exceeded the cost of asking for clarification up front.
+
+### 2026-05-10 - Don't use `or` chains on JSON dict values when 0/False are valid
+
+**Trigger:** WDGoWars `/api/me` parser: `payload.get("daily_quota_remaining") or payload.get("daily_remaining") or ...`. When the API returned `daily_quota_remaining: 0`, `or` treated 0 as falsy and fell through to defaults, masking the actual zero quota.
+**Correction:** Use explicit key-presence checks (`_first_present(payload, *keys)`) when the value 0/False/'' is semantically distinct from "missing."
+**Rule going forward:** `dict.get(...) or dict.get(...)` is fine for "first non-None string-ish value." For numeric or boolean fields where 0/False are valid, use `for k in keys: if k in payload: return payload[k]`.
+**Why:** This bug silently bypassed the WDGoWars quota check in production-like scenarios, allowing uploads that should have been deferred. Caught only because the unit test set `daily_quota_remaining: 0` and asserted the skip path was taken.
+
 ### 2026-05-10 - Don't roll a custom scoring formula
 
 **Trigger:** Initial PLAN.md proposed `score = 0.6 * new_to_you + 0.4 * new_territory_cell`.
