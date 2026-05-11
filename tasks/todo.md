@@ -1,8 +1,8 @@
 # WarRoute - Active TODO
 
-Current phase: **v1 code-complete.** All five PLAN.md phases shipped + post-v1 code (precheck, infra artifacts) landed. Remaining: live verification, Hetzner deploy execution, WDGoWars territory probe -- all parked until Domenic is on a clean network (not the school PC's NCSUVT Fortinet network).
+Current phase: **v1 code-complete + live-verified on home network.** All five PLAN.md phases shipped, plus post-v1 code (precheck, infra artifacts). WDGoWars territory-enumeration question is now answered (definitive: not exposed by the API). Remaining live-execution work: ORS key, in-car drive verification, Hetzner deploy.
 
-### Session 2026-05-11 outcome
+### Session 2026-05-11 (AM, school PC) outcome
 
 Three commits on `feature/phase-4-web-ui`:
 - `077ec8a` feat(notifications): phase 5 ntfy.sh push on run-complete
@@ -12,6 +12,14 @@ Three commits on `feature/phase-4-web-ui`:
 Also recorded a security finding: school-PC NCSUVT network is TLS-intercepted by a FortiGate device (`CN=FG6H0FTB22903890`). See `DECISIONS.md` for the no-bypass-verify reasoning. Token leak status: zero (Python aborted the handshake before transmission).
 
 Test count: 123 -> 156 (+33: 14 ntfy + 19 precheck).
+
+### Session 2026-05-11 (PM, home MSI) outcome
+
+Clean network (cert-chain pre-verified Let's Encrypt for all three API hosts). Unblocked the parked items that didn't require a car:
+
+- **Precheck live-verified.** First run hit a transient WiGLE `RequestError` (cold venv after `uv` rebuilt `.venv` from missing Python ref); second run clean. WiGLE: 151 networks in home bbox. WDGoWars: user=darkhorse, wifi=34870, recent_today=0, headroom=20000. ORS: still missing key. SPOOL_DIR + GPX_OUT_DIR: now created (`spool/in`, `gpx-out`, gitignored).
+- **WDGoWars 1.3.0 API surface mapped definitively.** Per-cell ownership IS NOT exposed by the API to token auth. See top DECISIONS.md entry. Newly discovered endpoints: `/api/territories` (187 gang polygons), `/api/badges`, `/api/leaderboard`, `/api/stats` (server v1.3.0). The current `cells.wdgowars_owner` NULL behavior is correct by design, not a missing-implementation bug.
+- **Minor robustness gap surfaced:** when `httpx.RequestError` has empty `str()`, `clients/wigle.py:125` raises `WigleError("WiGLE request failed: ")` with no detail, and the precheck hint defaults to TLS-chain advice that's misleading on a clean network. Tracked below.
 
 ## Phase 0 - Bootstrap
 
@@ -135,7 +143,16 @@ Test count: 123 -> 156 (+33: 14 ntfy + 19 precheck).
 
 ### Parked for clean-network session (see DECISIONS.md 2026-05-11 TLS interception entry)
 
-These two items cannot safely run from the school PC on the NCSUVT network (Fortinet TLS inspection in path). Defer to a session on MSI at home, or via VPN tunneled off the school network. Re-verify cert chain with `openssl s_client` before resuming.
-
+- [x] **Find WDGoWars territory-enumeration endpoint** (probed 2026-05-11 PM from home MSI). Answer: WDGoWars 1.3.0 does not expose per-cell ownership to API-token auth. See top DECISIONS.md entry + memory `reference_wdgowars_api.md`. `cells.wdgowars_owner` stays NULL by design.
 - [ ] Live verification: real wardrive run, real ORS plan, real WDGoWars upload (requires being in a car AND on a clean network)
-- [ ] Find WDGoWars territory-enumeration endpoint (probe `/api/territory`, `/api/cells`, `/api/gang/{id}` etc.)
+
+### Unblocked enhancements from the 2026-05-11 PM API-surface probe (post-v1, queued)
+
+- [ ] **Gang-territory overlay on `/coverage`.** Pull `/api/territories` and render the 187 gang `hull` polygons as colored layers on the Leaflet map. Highlight `gang_id==16` ("Biscuits", our gang) distinctly. New file `warroute/clients/wdgowars.py` method `gang_territories()` + a `/coverage/gangs.geojson` route + Leaflet layer.
+- [ ] **Richer `/api/me` parsing.** Extend `WdgowarsClient.me()` and the `PlayerState` dataclass to surface the 16 currently-unmapped fields: `country, joined, is_superuser, trusted, gang, gang_id, gang_role, mesh, cracked, aircraft, recent_7d, reinforce (per-zoom-counts), reinforce_total, credits {balance/bounties/lifetime}, badges`. Web dashboard's player card can then show gang affiliation, 7-day activity, credits balance, badge count.
+- [ ] **Server-version awareness.** Cheap GET to `/api/stats.version` at precheck time; warn if WDGoWars version changes (might expose new endpoints worth re-probing).
+- [ ] **Precheck robustness fix.** When `httpx.RequestError` has empty `str()` (e.g. transport-layer issues with no message), `clients/wigle.py` raises `WigleError("WiGLE request failed: ")` with no detail and the precheck hint suggests TLS-chain check, which is misleading. Use `repr(exc)` or `type(exc).__name__: {exc!s}` so the type at minimum is in the message. Same review for `clients/wdgowars.py` and `clients/ors.py`.
+
+### `.env.example` commit
+
+- [ ] **Commit `.env.example` ntfy block** (currently uncommitted; Domenic pasted the 7 lines manually). Minor formatting: one stray blank line before the block + no trailing newline. Either Domenic tidies and commits, or widen the `Read(./.env.example)` permission and let me edit it.

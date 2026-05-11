@@ -5,6 +5,38 @@ Append-only. Newest at top.
 
 ---
 
+## 2026-05-11 (PM, MSI home) - WDGoWars 1.3.0 API surface mapped; per-cell ownership not exposed
+
+**Question:** Find the WDGoWars territory-enumeration endpoint so `cells.wdgowars_owner` can be populated. Open from the 2026-05-11 morning DECISIONS entry; candidates queued were `/api/territory`, `/api/cells`, `/api/gang/{id}`, `/api/reinforce`.
+
+**Resolution:** Probed ~40 candidate paths from a clean home network (cert chain pre-verified Let's Encrypt). WDGoWars 1.3.0 exposes no endpoint that returns per-cell ownership IDs to API-token auth. Definitive list now in `memory/reference_wdgowars_api.md`.
+
+**What IS available (newly mapped):**
+- `/api/territories` — list of 187 gangs, each with `{name, color, members, points, hull, rank}`. The `hull` is a 12-point polygon: gang outer territory boundary. Usable for coloring gang regions on the coverage map. Filter params (`?owner=me`, `?mine=1`) are ignored — server returns the full list every time.
+- `/api/badges` — badge catalog (168 bytes), `{badges: ...}`.
+- `/api/leaderboard` — multi-leaderboard with `today / week / all_time / gangs / hunters / limit` slices.
+- `/api/stats` — server stats: `uptime, version (1.3.0), requests, bytes, status (HTTP codes), cache, shield, connections, php, memory_kb, top_domains`. Use for monitoring server availability.
+
+**`/api/me` is richer than mapped:** 22 top-level fields, of which the client currently surfaces 6. Unsurfaced: `country, joined, is_superuser, trusted, gang, gang_id, gang_role, mesh, cracked, aircraft, recent_7d, reinforce (per-zoom counts), reinforce_total, credits {balance/bounties/lifetime}, badges, donation_popup_suppressed`.
+
+**Confirmed-NOT-API (session-cookie only):** `/api/captures` 302-redirects to `/login/`. The WDGoWars web UI presumably has a per-capture history view, but it's not API-token accessible.
+
+**Confirmed 404 (all the ones we tried):** `/api/territory`, `/api/territory/me`, `/api/cells*`, `/api/owned*`, `/api/my/cells`, `/api/my/territory`, `/api/wifi*`, `/api/aps`, `/api/networks*`, `/api/reinforce*`, `/api/reinforcements`, `/api/credits`, `/api/players`, `/api/gangs`, `/api/gang/{id}*`, `/api/gangs/{id}`, `/api/territories/{id}`.
+
+**Decision:**
+- Close the open follow-up. `cells.wdgowars_owner` stays NULL by design. Don't probe further; the surface is mapped.
+- The DB schema and ownership column stay as-is — they are forward-compatible if WDGoWars later adds an enumeration endpoint, but we won't build code that depends on it landing.
+- Post-v1 enhancements unlocked by this probe (queued, not in scope now):
+  1. `coverage/` overlay using `/api/territories` hull polygons (color gang regions, highlight `gang_id==16` as "us").
+  2. Extend `WdgowarsClient.me()` to surface the 16 unmapped fields. The web dashboard's player card can show gang affiliation, recent_7d, credits balance, badge count.
+  3. `/health` check enhancement: poll `/api/stats.version` to detect WDGoWars upgrades (which might expose new endpoints).
+
+**Why this is fine:** WarRoute's value prop never required per-cell ownership granularity from WDGoWars. The PLAN's coverage analyzer was always going to lean on WiGLE for density and treat WDGoWars ownership as a sparse signal. Now we know it's a zero signal at the cell level and a polygon signal at the gang level. The router scorer already weights WiGLE density 100% in absence of WDGoWars data per `router/scorer.py`.
+
+**Probe hygiene:** No probe script committed. Token never echoed; only HTTP status, body length, top-level keys printed. Probe code ran inline via `uv run python -c "..."`. Self-cleaning by construction.
+
+---
+
 ## 2026-05-11 - Phase 5 notifications: run-complete only in v1; plan + quota toggles wired but no-op
 
 **Question:** PLAN.md §3.5 punts push notifications to v1.1, but Domenic wants them landed now. Should we ship just the run-complete notification (per the PLAN body example) or also wire plan-complete and quota-warning notifications?
@@ -69,7 +101,7 @@ That is a FortiGate firewall's TLS-inspection certificate (`FG6H0...` is a Forti
 - **No `owned_cells` list** — `/api/me` does not enumerate territory cells. Need a different endpoint (TBD).
 - **No `daily_quota_remaining`** — derive as `20000 - recent_today` (PLAN.md cap).
 
-**Open follow-up:** Find the territory-enumeration endpoint. Candidates to probe next: `/api/territory`, `/api/cells`, `/api/gang/{id}`, `/api/reinforce`.
+**Open follow-up:** Find the territory-enumeration endpoint. Candidates to probe next: `/api/territory`, `/api/cells`, `/api/gang/{id}`, `/api/reinforce`. **RESOLVED 2026-05-11 PM** — see top entry; WDGoWars 1.3.0 does not expose per-cell ownership to API-token auth.
 
 ---
 
