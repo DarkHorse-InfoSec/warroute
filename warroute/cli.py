@@ -248,6 +248,41 @@ def serve(
     uvicorn.run("warroute.web.app:app", host=host, port=port, reload=reload, log_level="info")
 
 
+@app.command()
+def precheck() -> None:
+    """Pre-drive sanity check: verify external APIs + filesystem are ready.
+
+    Hits WIGLE, WDGoWars, and ORS with auth-check calls (concurrently) plus
+    writability checks on SPOOL_DIR and GPX_OUT_DIR. Reports per-check status
+    and an overall verdict. Exits 0 on PASS, 1 on WARN, 2 on FAIL so you can
+    chain it into shell scripts or a pre-flight phone shortcut.
+
+    Do NOT run from a network with TLS interception (e.g. school PC on NCSUVT
+    Fortinet network); tokens transit through the inspection device. See
+    DECISIONS.md 2026-05-11 entry.
+    """
+    from warroute.precheck import Status, run_all, verdict
+
+    results = asyncio.run(run_all())
+    for r in results:
+        color = {
+            Status.OK: "green",
+            Status.WARN: "yellow",
+            Status.FAIL: "red",
+        }[r.status]
+        label = f"[{color}]{r.status.value.upper():4}[/{color}]"
+        console.print(f"{label}  {r.name:12} {r.detail}")
+        if r.hint:
+            console.print(f"        [dim]hint:[/dim] {r.hint}")
+    overall = verdict(results)
+    color = {Status.OK: "green", Status.WARN: "yellow", Status.FAIL: "red"}[overall]
+    console.print(f"\n[{color}]Overall: {overall.value.upper()}[/{color}]")
+    if overall == Status.FAIL:
+        raise typer.Exit(code=2)
+    if overall == Status.WARN:
+        raise typer.Exit(code=1)
+
+
 @coverage_app.command("probe-wdgowars")
 def probe_wdgowars(
     path: str = typer.Argument("/api/me", help="WDGoWars API path to GET"),
