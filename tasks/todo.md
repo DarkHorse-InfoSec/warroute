@@ -61,6 +61,24 @@ Skipped per Domenic 2026-05-10 (DECISIONS.md). Manual upload until route planner
 
 ---
 
-## Phase 3/4
+## Phase 3 - Route planner (DONE, awaiting ORS key for live verification)
 
-See `PLAN.md` sections 3.3-3.4. Phase 3 (route planner) is the next high-value piece. Needs `ORS_API_KEY` (Domenic adding tomorrow).
+- [x] `clients/ors.py` - async OpenRouteService client (directions + optimization)
+- [x] `router/scorer.py` - native scoring via WDGoWars capture_value x WiGLE density
+- [x] `router/planner.py` - greedy pick + optimization + back-off if over budget
+- [x] `router/gpx.py` - GPX 1.1 writer + Google Maps multi-stop URL
+- [x] `planned_routes` table persistence integrated into planner
+- [x] CLI: `warroute plan --duration 90m --mode loop|oneway --out drive.gpx`
+- [x] 83/83 tests passing, ruff + mypy clean
+
+### Phase 3 acceptance status
+
+- All logic and structure complete with mocked ORS responses.
+- Live verification blocked on ORS_API_KEY (Domenic adding tomorrow).
+- Empirical verification (3x new APs/min vs commute baseline) requires a real drive.
+
+---
+
+## Phase 4 - Mobile-friendly UI (next)
+
+Pages: `/`, `/plan`, `/coverage`, `/runs/<id>`, `/settings`. FastAPI + Jinja2 + HTMX + Leaflet. HTTP basic auth at Caddy layer. See `PLAN.md` §3.4.
