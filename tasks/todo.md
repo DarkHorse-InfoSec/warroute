@@ -49,15 +49,17 @@ Current phase: **Phase 2 (coverage analyzer)** - per Domenic's 2026-05-10 direct
 
 ---
 
-## Phase 1 - Dual-uploader (deferred)
+## Phase 1 - Dual-uploader (DONE - back-built after Phase 2/3 due to ordering miss)
 
-Skipped per Domenic 2026-05-10 (DECISIONS.md). Manual upload until route planner ships.
-
-- [ ] `uploader/parser.py` - WigleWifi-1.6 CSV parser, dedup within file
-- [ ] `uploader/wigle.py` - POST to WiGLE.net upload endpoint, 429 backoff
-- [ ] `uploader/wdgowars.py` - already has `upload_csv` skeleton in clients/wdgowars.py; promote + harden
-- [ ] `uploader/watcher.py` - watchdog daemon on `SPOOL_DIR`
-- [ ] `cli.py`: add `warroute upload <file>` and `warroute watch`
+- [x] `uploader/parser.py` - WigleWifi-1.6 CSV parser, dedup-by-BSSID-keep-strongest, sha256
+- [x] `uploader/wigle_upload.py` - POST to WiGLE.net `/api/v2/file/upload`, 429 backoff
+- [x] `uploader/wdgowars_upload.py` - quota pre-flight via `/api/me`, then upload
+- [x] `uploader/orchestrator.py` - parallel dual-upload + sessions/observations write + sha256 idempotency
+- [x] `uploader/watcher.py` - watchdog daemon on `SPOOL_DIR`, fires on close-write
+- [x] CLI: `warroute upload <file>` and `warroute watch`
+- [x] Fixture CSV + 75/75 tests passing, ruff + mypy clean
+- [x] Bugfix: WDGoWars `/api/me` parser was treating `0` as falsy in `or` chains; switched to `_first_present()` (key-presence checks)
+- [x] Bugfix: dropped `sqlite3.PARSE_DECLTYPES` (it choked on ISO-T timestamps)
 
 ---
 

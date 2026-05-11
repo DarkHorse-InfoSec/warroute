@@ -5,6 +5,27 @@ Append-only. Newest at top.
 
 ---
 
+## 2026-05-11 - WDGoWars auth is `X-API-Key`, not `Authorization: Bearer`
+
+**Question:** First probe of `/api/me` against the real account 401'd. We had assumed Bearer auth based on PLAN.md.
+
+**Resolution:** Empirical probe (`scripts/probe_wdgowars_auth.py`, since deleted) tried 7 auth styles. Only `X-API-Key: <token>` returned 200. Updated `clients/wdgowars.py` accordingly.
+
+**`/api/me` real response shape (probed 2026-05-11):**
+- `ok: true|false` (success indicator, not `success`)
+- `username`, `country`, `joined`, `is_superuser`, `trusted`, `gang`, `gang_id`, `gang_role`
+- `total` (all entities), `wifi`, `ble`, `mesh`, `cracked`, `aircraft`
+- `recent_today`, `recent_7d`
+- `reinforce: {zoom_level: count}` and `reinforce_total` (territory data, but as counts not cell IDs)
+- `credits: {balance, bounties_completed, lifetime_earned}`
+- `badges: [string]`
+- **No `owned_cells` list** — `/api/me` does not enumerate territory cells. Need a different endpoint (TBD).
+- **No `daily_quota_remaining`** — derive as `20000 - recent_today` (PLAN.md cap).
+
+**Open follow-up:** Find the territory-enumeration endpoint. Candidates to probe next: `/api/territory`, `/api/cells`, `/api/gang/{id}`, `/api/reinforce`.
+
+---
+
 ## 2026-05-10 - WDGoWars API surface is undocumented; build to known endpoints + probe
 
 **Question:** PLAN.md mentions `/api/upload-csv` and `/api/me` but doesn't list endpoints for territory ownership, per-cell capture value, or owned-cell enumeration. The wdgwars.pl site is auth-gated; no public docs reachable.
@@ -17,13 +38,21 @@ Append-only. Newest at top.
 
 ---
 
-## 2026-05-10 - Phase ordering: skip Phase 1, jump to Phase 2
+## 2026-05-10 - REVERSED: Phase ordering decision was wrong
+
+**Question:** Original entry below stated Phase 1 was being skipped per Domenic's direction.
+
+**Resolution:** I misread Domenic's "move onto Phase 2" as "skip Phase 1." He had previously told me to build phases in strict order. Phase 1 was back-built after Phases 2 and 3 already had PRs open, creating awkward branch dependencies. Lesson saved to `tasks/lessons.md` and to project memory.
+
+**Implication for repo:** Phase 1's uploader code branched from Phase 2's branch (so it can use the WiGLE+WDGoWars clients that already lived there). Merge order: PR #1 (Phase 2) -> PR #3 (Phase 1, this) -> PR #2 (Phase 3). Going forward: build phases strictly in order; if uncertain, ask.
+
+### 2026-05-10 - Phase ordering: skip Phase 1, jump to Phase 2 (HISTORICAL)
 
 **Question:** PLAN.md sequenced uploader (Phase 1) before coverage (Phase 2).
 
-**Resolution:** Domenic directed to skip Phase 1 for now and build Phase 2. Reasoning: dual-upload automation is a quality-of-life win, but the actual game-changer is route planning (Phase 3), which depends on Phase 2 (coverage) and not Phase 1 (uploader). Manual upload is a fine bandaid until the route planner ships.
+**Resolution at the time:** Domenic directed to skip Phase 1 for now and build Phase 2. Reasoning: dual-upload automation is a quality-of-life win, but the actual game-changer is route planning (Phase 3), which depends on Phase 2 (coverage) and not Phase 1 (uploader). Manual upload is a fine bandaid until the route planner ships.
 
-**Implication:** WiGLE and WDGoWars HTTP clients (originally scoped to Phase 1) are built here as shared dependencies under `warroute/clients/`, not `warroute/uploader/`. Phase 1 will reuse them when revisited.
+**Implication at the time:** WiGLE and WDGoWars HTTP clients (originally scoped to Phase 1) were built under `warroute/clients/` (shared by Phase 1 and Phase 2) rather than `warroute/uploader/`. This part of the structure stayed correct even after the phase-skip was reversed.
 
 ---
 
