@@ -1,6 +1,8 @@
 # WarRoute - Active TODO
 
-Current phase: **Phase 0 (bootstrap)**.
+Current phase: **Phase 2 (coverage analyzer)** - per Domenic's 2026-05-10 direction to skip the dual-uploader for now.
+
+> Note: PLAN.md sequencing was Phase 1 (uploader) -> Phase 2 (coverage). Phase 1 will be revisited once Domenic decides whether to go fully automated upload or stay manual.
 
 ## Phase 0 - Bootstrap
 
@@ -27,20 +29,38 @@ Current phase: **Phase 0 (bootstrap)**.
 
 ---
 
-## Phase 1 - Dual-uploader (next)
+## Phase 2 - Coverage analyzer (DONE)
 
-Blocked on: Phase 0 acceptance.
+- [x] `clients/wigle.py` - WiGLE search API client, throttled to 1 req/sec
+- [x] `clients/wdgowars.py` - WDGoWars client, /api/me + probe + upload skeleton
+- [x] `coverage/grid.py` - aligned 2x3 km cell grid generator
+- [x] `coverage/cells.py` - DAL: upsert, density, ownership, stale filter
+- [x] `coverage/sync.py` - orchestration: paint grid + WDGoWars + WiGLE
+- [x] `coverage/report.py` - text summary
+- [x] CLI: `warroute coverage refresh|report|probe-wdgowars`
+- [x] DECISIONS.md created (WDGoWars endpoints undocumented; phase-skip reasoning; HTTPS push)
+- [x] 50/50 tests passing, ruff + mypy clean
 
-- [ ] `uploader/parser.py` - WigleWifi-1.6 CSV parser, dedup within file
-- [ ] `uploader/wigle.py` - POST to WiGLE.net upload endpoint, 429 backoff
-- [ ] `uploader/wdgowars.py` - POST to wdgwars.pl/api/upload-csv, respect 20k/day cap
-- [ ] `uploader/watcher.py` - watchdog daemon on `SPOOL_DIR`
-- [ ] `cli.py`: add `warroute upload <file>` and `warroute watch`
-- [ ] Unit tests against fixture CSV
-- [ ] Integration tests gated on `RUN_INTEGRATION=1`
+### Phase 2 acceptance status
+
+- Logic and structure complete; full end-to-end against real APIs pending:
+  - WiGLE rate limit budget for ~1300 cells at 50 km radius = ~22 minutes for first refresh. Acceptable.
+  - WDGoWars endpoint shapes for owned-cell list need confirmation via `coverage probe-wdgowars` (run when convenient).
 
 ---
 
-## Phase 2/3/4
+## Phase 1 - Dual-uploader (deferred)
 
-See `PLAN.md` sections 3.2-3.4. Don't expand here until Phase 1 is shipping.
+Skipped per Domenic 2026-05-10 (DECISIONS.md). Manual upload until route planner ships.
+
+- [ ] `uploader/parser.py` - WigleWifi-1.6 CSV parser, dedup within file
+- [ ] `uploader/wigle.py` - POST to WiGLE.net upload endpoint, 429 backoff
+- [ ] `uploader/wdgowars.py` - already has `upload_csv` skeleton in clients/wdgowars.py; promote + harden
+- [ ] `uploader/watcher.py` - watchdog daemon on `SPOOL_DIR`
+- [ ] `cli.py`: add `warroute upload <file>` and `warroute watch`
+
+---
+
+## Phase 3/4
+
+See `PLAN.md` sections 3.3-3.4. Phase 3 (route planner) is the next high-value piece. Needs `ORS_API_KEY` (Domenic adding tomorrow).
