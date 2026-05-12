@@ -34,6 +34,12 @@
 </div>
 {% endif %}
 
+{% if loop_bumped_notice %}
+<div class="flash warn">
+  {{ loop_bumped_notice }}
+</div>
+{% endif %}
+
 {% if resolved_start_label %}
 <div class="flash info">
   Start resolved to: <strong>{{ resolved_start_label }}</strong>

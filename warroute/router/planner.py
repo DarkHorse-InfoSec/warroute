@@ -36,7 +36,16 @@ EARTH_KM_PER_DEG_LAT = 111.32
 
 
 class PlannerError(RuntimeError):
-    """Planner could not satisfy the request (budget too tight, no candidates, etc.)."""
+    """Planner could not satisfy the request (budget too tight, no candidates, etc.).
+
+    Carries `last_attempted_min` when an ORS call was actually made: callers can use
+    it to auto-bump the budget (e.g. loop mode: "minimum viable loop here is 46 min,
+    you asked for 20; retry at 50").
+    """
+
+    def __init__(self, message: str, last_attempted_min: float | None = None) -> None:
+        super().__init__(message)
+        self.last_attempted_min = last_attempted_min
 
 
 @dataclass
@@ -261,7 +270,8 @@ async def _solve_with_backoff(
         ordered = [chosen[i] for i in last_leg.waypoint_order if 0 <= i < len(chosen)]
         return last_leg, ordered
     raise PlannerError(
-        f"Could not fit any plan in {request.duration_min} min budget; tried backing off."
+        f"Could not fit any plan in {request.duration_min} min budget; tried backing off.",
+        last_attempted_min=last_leg.duration_min if last_leg else None,
     )
 
 

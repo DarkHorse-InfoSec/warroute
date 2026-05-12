@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
+from math import ceil
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Query, Request
@@ -225,12 +227,14 @@ async def post_plan(
         req.direct_min = direct_min
 
     direct_fallback_notice: str | None = None
+    loop_bumped_notice: str | None = None
     try:
         result = await run_plan(req)
     except PlannerError as exc:
-        # Graceful fallback: if this is oneway and we have the direct-route leg,
-        # build a 0-cell plan so the user still gets a Google Maps deep-link to
-        # their destination instead of a dead-end error.
+        # Graceful fallback paths: never leave the user with a dead-end error.
+        # Oneway: 0-cell plan using the precheck's direct leg.
+        # Loop:   auto-bump the budget to the minimum viable from the planner's
+        #         last-attempt duration, then retry once.
         if mode == "oneway" and direct_leg is not None:
             result = persist_direct_route(req, direct_leg)
             if direct_min is not None:
@@ -244,6 +248,45 @@ async def post_plan(
                     f"Could not fit any AP-scanning detour in your {duration_min} min budget."
                     f" Showing the direct route. Increase the budget to add detour cells."
                 )
+        elif mode == "loop":
+            # Pull the planner's actual minimum-needed duration from the last attempt.
+            # If we got nothing back (no candidates at all), try 2x the requested budget.
+            fallback_min = exc.last_attempted_min or float(duration_min) * 2.0
+            bumped = max(ceil(fallback_min * 1.15), duration_min + 10)
+            if bumped > 480 or bumped <= duration_min:
+                return render(
+                    request,
+                    "plan_form.html",
+                    defaults={
+                        "duration_min": duration_min,
+                        "home_lat": req.home_lat,
+                        "home_lon": req.home_lon,
+                    },
+                    error=f"{exc} (no viable plan even at extended budget)",
+                )
+            try:
+                bumped_req = replace(req, duration_min=bumped)
+                result = await run_plan(bumped_req)
+                loop_bumped_notice = (
+                    f"Your {duration_min} min budget was too tight for any loop in this area."
+                    f" Auto-bumped to {bumped} min so you get a route. Decrease the budget"
+                    f" next time, or accept this longer drive."
+                )
+                req = bumped_req  # so the result page shows the bumped budget
+            except PlannerError as exc2:
+                return render(
+                    request,
+                    "plan_form.html",
+                    defaults={
+                        "duration_min": duration_min,
+                        "home_lat": req.home_lat,
+                        "home_lon": req.home_lon,
+                    },
+                    error=(
+                        f"Could not fit a loop in {duration_min} min, and the auto-bump"
+                        f" to {bumped} min also failed: {exc2}"
+                    ),
+                )
         else:
             return render(
                 request,
@@ -253,15 +296,7 @@ async def post_plan(
                     "home_lat": req.home_lat,
                     "home_lon": req.home_lon,
                 },
-                error=(
-                    f"{exc}"
-                    + (
-                        " (try a longer time budget — your area may not have"
-                        " scored cells within reach)"
-                        if mode == "loop"
-                        else ""
-                    )
-                ),
+                error=str(exc),
             )
     except OrsQuotaError:
         return render(
@@ -337,6 +372,7 @@ async def post_plan(
         resolved_destination_label=resolved_destination_label,
         direct_min=direct_min,
         direct_fallback_notice=direct_fallback_notice,
+        loop_bumped_notice=loop_bumped_notice,
     )
 
 

@@ -370,15 +370,19 @@ def test_plan_post_falls_back_to_direct_route_when_no_cells_fit(
 
 
 @respx.mock
-def test_plan_post_loop_with_no_cells_suggests_longer_budget(client: TestClient) -> None:
-    """Loop mode has no destination, so direct-route fallback doesn't apply.
-    The error message should at least tell the user to try a longer budget."""
+def test_plan_post_loop_with_no_cells_falls_through_to_form(client: TestClient) -> None:
+    """Loop with empty DB: no candidates -> exc.last_attempted_min is None ->
+    auto-bump retry uses 2*budget=40 min. Still no cells -> form re-renders with
+    a clear 'no viable plan' message."""
     resp = client.post(
         "/plan",
         data={"duration_min": "20", "mode": "loop", "start": "", "start_query": ""},
     )
     assert resp.status_code == 200
-    assert "longer time budget" in resp.text or "increase" in resp.text.lower()
+    # Either auto-bump-also-failed message OR the original "no scored cells" passes
+    # through. Both are acceptable, both surface on the form (not a 500 / dead-end).
+    text = resp.text.lower()
+    assert "no scored cells" in text or "no viable plan" in text or "auto-bump" in text
 
 
 @respx.mock
