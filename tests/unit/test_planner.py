@@ -50,6 +50,46 @@ def test_plan_request_reachable_radius_for_oneway() -> None:
     assert req.reachable_radius_km() == pytest.approx(DEFAULT_AVG_SPEED_KMH)
 
 
+def test_plan_request_detour_budget_oneway_with_direct_min() -> None:
+    """When direct_min is known, detour_budget is what's left for AP scanning."""
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=30,
+        mode="oneway",
+        destination_lat=44.95,
+        destination_lon=-72.17,
+        direct_min=6.0,
+    )
+    assert req.detour_budget_min() == pytest.approx(24.0)
+    # Corridor: 24 min * 40 km/h / 60 / 8 = 2 km
+    assert req.corridor_half_width_km() == pytest.approx(2.0, abs=0.05)
+
+
+def test_plan_request_detour_budget_loop_uses_full_duration() -> None:
+    req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=60, mode="loop")
+    assert req.detour_budget_min() == pytest.approx(60.0)
+
+
+def test_point_to_segment_km_helper() -> None:
+    """Cell ON the segment -> 0. Cell perpendicular to segment -> haversine-equivalent."""
+    from warroute.router.planner import _point_to_segment_km
+
+    # Segment from (44.95, -72.13) to (44.95, -72.17): a horizontal line in lat=44.95.
+    # A point right on the midpoint should be ~0 km away.
+    d_on = _point_to_segment_km(44.95, -72.15, 44.95, -72.13, 44.95, -72.17)
+    assert d_on < 0.05
+
+    # A point 0.01 deg north of the midpoint (~1.11 km offset).
+    d_off = _point_to_segment_km(44.96, -72.15, 44.95, -72.13, 44.95, -72.17)
+    assert 1.0 < d_off < 1.2
+
+    # A point BEYOND the segment endpoint should clamp to endpoint distance.
+    # Point at (44.95, -72.10), segment ends at (44.95, -72.13) -> 0.03 deg lon -> ~2.4 km.
+    d_beyond = _point_to_segment_km(44.95, -72.10, 44.95, -72.13, 44.95, -72.17)
+    assert 2.2 < d_beyond < 2.7
+
+
 def test_plan_request_oneway_requires_destination() -> None:
     req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=60, mode="oneway")
     with pytest.raises(PlannerError):

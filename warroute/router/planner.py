@@ -48,6 +48,7 @@ class PlanRequest:
     destination_lat: float | None = None
     destination_lon: float | None = None
     avg_speed_kmh: float = DEFAULT_AVG_SPEED_KMH
+    direct_min: float | None = None  # T_direct in min (oneway only); enables corridor filter
 
     def reachable_radius_km(self) -> float:
         """Half the time-budget for loops (you have to come back); full for one-way."""
@@ -55,6 +56,22 @@ class PlanRequest:
         if self.mode == "loop":
             return hours * self.avg_speed_kmh / 2.0
         return hours * self.avg_speed_kmh
+
+    def detour_budget_min(self) -> float:
+        """Minutes left over for AP-scanning detours after the direct drive (oneway)."""
+        if self.mode != "oneway" or self.direct_min is None:
+            return float(self.duration_min)
+        return max(0.0, self.duration_min - self.direct_min)
+
+    def corridor_half_width_km(self) -> float:
+        """Max distance from the home->destination line for a cell to be a viable candidate.
+
+        Heuristic: with detour budget S minutes, and assuming we visit ~4 cells, each cell
+        adds ~2 * d_to_corridor of out-and-back. So d_max ≈ S * speed / (60 * 8). The 8 in
+        the denominator is a back-off-friendly upper bound (real picks rarely visit 4 cells
+        at the max distance; the planner backs off greedy until the route fits).
+        """
+        return self.detour_budget_min() * self.avg_speed_kmh / 60.0 / 8.0
 
     def end_waypoint(self) -> Waypoint:
         if self.mode == "loop":
@@ -141,7 +158,14 @@ async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult
 
 
 def _candidate_cells(request: PlanRequest) -> list[CellScore]:
-    """All scored cells whose center is within the reachable radius of home."""
+    """Cells that are viable detour candidates given the request.
+
+    Loop mode: cells within reachable_radius of home (the symmetric old behavior).
+
+    Oneway mode with `direct_min` set: cells within `corridor_half_width_km` of the
+    home->destination line segment. This keeps detours along the path instead of
+    radiating around home (which produced absurd 80-min routes for 15-min destinations).
+    """
     radius_km = request.reachable_radius_km()
     if radius_km <= 0:
         raise PlannerError(f"duration_min={request.duration_min} yields zero reachable radius")
@@ -149,12 +173,42 @@ def _candidate_cells(request: PlanRequest) -> list[CellScore]:
     with transaction() as conn:
         all_rows = cells_dal.all_cells(conn)
     scored = rank_cells(all_rows)
-    in_range = [
-        s
-        for s in scored
-        if _km_between(request.home_lat, request.home_lon, s.center_lat, s.center_lon) <= radius_km
-        and s.ownership != "me"  # don't waste a slot on cells we already own
-    ]
+
+    use_corridor = (
+        request.mode == "oneway"
+        and request.destination_lat is not None
+        and request.destination_lon is not None
+        and request.direct_min is not None
+    )
+    if use_corridor:
+        # `use_corridor` already guarantees these are not None; assert for mypy.
+        assert request.destination_lat is not None
+        assert request.destination_lon is not None
+        dest_lat = request.destination_lat
+        dest_lon = request.destination_lon
+        corridor_km = max(request.corridor_half_width_km(), 2.0)  # min 2km for tight budgets
+        in_range = [
+            s
+            for s in scored
+            if _point_to_segment_km(
+                s.center_lat,
+                s.center_lon,
+                request.home_lat,
+                request.home_lon,
+                dest_lat,
+                dest_lon,
+            )
+            <= corridor_km
+            and s.ownership != "me"
+        ]
+    else:
+        in_range = [
+            s
+            for s in scored
+            if _km_between(request.home_lat, request.home_lon, s.center_lat, s.center_lon)
+            <= radius_km
+            and s.ownership != "me"
+        ]
     return in_range
 
 
@@ -233,3 +287,34 @@ def _km_between(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlam = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
     return 2 * radius * math.asin(math.sqrt(a))
+
+
+def _point_to_segment_km(
+    plat: float, plon: float, alat: float, alon: float, blat: float, blon: float
+) -> float:
+    """Distance (km) from point P to segment AB.
+
+    Uses an equirectangular projection around the segment midpoint - good to ~1% for
+    segments under ~50km at mid-latitudes, plenty for WarRoute corridor filtering.
+    """
+    import math
+
+    KM_PER_DEG_LAT = 111.32
+    lat0 = (alat + blat) / 2.0
+    cos_lat0 = math.cos(math.radians(lat0))
+    ax = alon * cos_lat0 * KM_PER_DEG_LAT
+    ay = alat * KM_PER_DEG_LAT
+    bx = blon * cos_lat0 * KM_PER_DEG_LAT
+    by = blat * KM_PER_DEG_LAT
+    px = plon * cos_lat0 * KM_PER_DEG_LAT
+    py = plat * KM_PER_DEG_LAT
+    abx = bx - ax
+    aby = by - ay
+    ab_len_sq = abx * abx + aby * aby
+    if ab_len_sq < 1e-9:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * abx + (py - ay) * aby) / ab_len_sq
+    t = max(0.0, min(1.0, t))
+    fx = ax + t * abx
+    fy = ay + t * aby
+    return math.hypot(px - fx, py - fy)

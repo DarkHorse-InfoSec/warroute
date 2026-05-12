@@ -91,7 +91,7 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
     We don't seed the grid; the planner will fail with 'no scored cells' AFTER
     geocoding the query. That tells us the destination-resolution path worked.
     """
-    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, ORS_API_BASE
 
     geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
         return_value=httpx.Response(
@@ -108,6 +108,13 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
                     }
                 ]
             },
+        )
+    )
+    # New: oneway now precheck-calls /directions to validate budget covers direct drive.
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 12000, "duration": 1200}, "geometry": None}]},
         )
     )
     # No `destination` hidden value, only `destination_query` typed text.
@@ -132,10 +139,17 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
 @respx.mock
 def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient) -> None:
     """When the hidden destination field is set, don't call the geocoder."""
-    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, ORS_API_BASE
 
     geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
         return_value=httpx.Response(200, json={"features": []})
+    )
+    # Oneway path now precheck-calls /directions for direct-route time.
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 12000, "duration": 1200}, "geometry": None}]},
+        )
     )
     resp = client.post(
         "/plan",
@@ -276,6 +290,36 @@ def test_plan_post_oneway_rejects_destination_beyond_reachable_radius(
     assert "San Luis Obispo" in resp.text  # surfaces the bad match
     # Did NOT proceed to call ORS optimization with a 4400km destination.
     assert "Plan #" not in resp.text
+
+
+@respx.mock
+def test_plan_post_rejects_budget_smaller_than_direct_drive(client: TestClient) -> None:
+    """Budget must at least cover the direct drive time."""
+    from warroute.clients.ors import DIRECTIONS_PATH, ORS_API_BASE
+
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {"summary": {"distance": 12000, "duration": 1800}, "geometry": None}
+                ]
+            },
+        )
+    )
+    # User asks for 10 min total but destination is 30 min direct.
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "10",
+            "mode": "oneway",
+            "destination": "44.96,-72.20",
+            "destination_query": "",
+        },
+    )
+    assert resp.status_code == 200
+    assert "min away by direct drive" in resp.text
+    assert "Increase the budget" in resp.text
 
 
 @respx.mock

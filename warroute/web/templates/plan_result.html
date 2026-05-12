@@ -15,6 +15,12 @@
   <div class="card">
     <div class="label">Drive time</div>
     <div class="value">{{ "%.0f"|format(result.estimated_drive_min) }} min</div>
+    {% if direct_min %}
+      <div class="label" style="margin-top: 0.4rem;">
+        Direct: {{ "%.0f"|format(direct_min) }} min
+        &middot; Detour: +{{ "%.0f"|format(result.estimated_drive_min - direct_min) }} min
+      </div>
+    {% endif %}
   </div>
   <div class="card">
     <div class="label">Distance</div>

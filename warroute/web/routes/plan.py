@@ -148,6 +148,7 @@ async def post_plan(
         mode=mode,
         destination_lat=dest_lat,
         destination_lon=dest_lon,
+        direct_min=None,  # populated below after the direct-route precheck
     )
 
     # Sanity check: if the geocoder returned a destination way outside the budget's
@@ -175,6 +176,46 @@ async def post_plan(
                     f"duration, or tap a closer match in the dropdown."
                 ),
             )
+
+    # For oneway plans, fetch the direct-route time first. This lets us:
+    #   1. Reject budgets that can't even reach the destination (with a useful message)
+    #   2. Show the user the direct vs detour breakdown on the result page
+    # The planner will still back off cells to fit within `duration_min`.
+    direct_min: float | None = None
+    if mode == "oneway" and dest_lat is not None and dest_lon is not None:
+        try:
+            async with OrsClient() as ors:
+                direct_leg = await ors.directions(
+                    [
+                        Waypoint(start_lat, start_lon, label="start"),
+                        Waypoint(dest_lat, dest_lon, label="dest"),
+                    ],
+                    with_geometry=False,
+                )
+            direct_min = direct_leg.duration_s / 60.0
+        except OrsQuotaError:
+            logger.warning("ORS quota on direct-route precheck; skipping budget validation")
+        except OrsError as exc:
+            logger.warning("Direct-route precheck failed: %s; skipping budget validation", exc)
+
+        if direct_min is not None and duration_min < direct_min:
+            picked = resolved_destination_label or f"{dest_lat:.4f},{dest_lon:.4f}"
+            return render(
+                request,
+                "plan_form.html",
+                defaults={
+                    "duration_min": duration_min,
+                    "home_lat": req.home_lat,
+                    "home_lon": req.home_lon,
+                },
+                error=(
+                    f"Destination is ~{direct_min:.0f} min away by direct drive ({picked}),"
+                    f" but your time budget is only {duration_min} min."
+                    f" Increase the budget or pick a closer destination."
+                ),
+            )
+        # Plumb direct_min into PlanRequest so the planner's corridor filter kicks in.
+        req.direct_min = direct_min
 
     try:
         result = await run_plan(req)
@@ -261,6 +302,7 @@ async def post_plan(
         maps_url=maps_url,
         resolved_start_label=resolved_start_label,
         resolved_destination_label=resolved_destination_label,
+        direct_min=direct_min,
     )
 
 

@@ -63,7 +63,9 @@ class Settings(BaseSettings):
     home_lat: float = Field(default=44.9367)
     home_lon: float = Field(default=-72.2051)
     home_radius_km: float = Field(default=50.0)
-    default_duration_min: int = Field(default=90)
+    default_duration_min: int = Field(
+        default=30, description="Default time budget (min). Short = quick trip + small detour."
+    )
 
     # Paths
     database_url: str = Field(default="sqlite:///warroute.db")

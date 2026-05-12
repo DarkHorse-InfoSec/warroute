@@ -10,8 +10,12 @@
 <form class="stack" method="post" action="/plan">
   <div>
     <label for="duration_min">Time budget (min)</label>
-    <input id="duration_min" name="duration_min" type="number" min="20" max="480" step="5"
+    <input id="duration_min" name="duration_min" type="number" min="10" max="480" step="5"
            value="{{ defaults.duration_min }}" required />
+    <span class="muted" style="font-size: 12px; display: block; margin-top: 0.25rem;">
+      Loop: total drive time. Oneway: total including the direct drive
+      (any extra over the direct route becomes AP-scanning detour).
+    </span>
   </div>
 
   <div>
