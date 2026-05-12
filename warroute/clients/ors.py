@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 ORS_API_BASE = "https://api.openrouteservice.org"
 DIRECTIONS_PATH = "/v2/directions/driving-car"
 OPTIMIZATION_PATH = "/optimization"
+GEOCODE_PATH = "/geocode/search"  # ORS Pelias forward geocoding
 DEFAULT_TIMEOUT = 60.0
 MAX_OPTIMIZATION_JOBS = 25  # ORS-imposed practical ceiling per request
 
@@ -53,6 +54,22 @@ class Waypoint:
     def to_lon_lat(self) -> list[float]:
         """ORS uses [lon, lat] order in coordinates."""
         return [self.lon, self.lat]
+
+
+@dataclass
+class GeocodeResult:
+    """A single geocoder hit. Returned by OrsClient.geocode().
+
+    `name` is the short label (e.g. "Kohl's"); `label` is the full formatted
+    address (e.g. "Kohl's, 155 Dorset St, South Burlington, VT 05403, USA").
+    """
+
+    name: str
+    label: str
+    lat: float
+    lon: float
+    layer: str | None = None  # venue, address, locality, region, etc.
+    confidence: float | None = None  # 0.0-1.0 from Pelias
 
 
 @dataclass
@@ -129,6 +146,85 @@ class OrsClient:
         if not isinstance(data, dict):
             raise OrsError(f"ORS returned non-object body at {path}: {data!r}")
         return data
+
+    async def geocode(
+        self,
+        query: str,
+        focus: Waypoint | None = None,
+        country: str = "US",
+        size: int = 5,
+    ) -> list[GeocodeResult]:
+        """Geocode a free-text place name to one or more (lat, lon) hits.
+
+        Uses ORS Pelias /geocode/search (free tier: ~1000 geocodes/day per key).
+        `focus` biases results toward a region (e.g. user's home), which matters
+        for short queries like "Kohl's" where there are many global matches.
+        Returns an empty list when query is blank or no features come back.
+        """
+        if not query or not query.strip():
+            return []
+        if self._client is None:
+            raise OrsError("OrsClient must be used as an async context manager")
+
+        params: dict[str, str] = {"text": query.strip(), "size": str(size)}
+        if country:
+            params["boundary.country"] = country
+        if focus is not None:
+            params["focus.point.lat"] = f"{focus.lat:.6f}"
+            params["focus.point.lon"] = f"{focus.lon:.6f}"
+
+        try:
+            resp = await self._client.get(GEOCODE_PATH, params=params)
+        except httpx.RequestError as exc:
+            raise OrsError(f"ORS geocode failed ({type(exc).__name__}): {exc}") from exc
+
+        if resp.status_code in (401, 403):
+            raise OrsAuthError(f"ORS rejected key at {GEOCODE_PATH} ({resp.status_code})")
+        if resp.status_code == 429:
+            raise OrsQuotaError(f"ORS geocode quota or rate limit at {GEOCODE_PATH}")
+        if resp.status_code >= 400:
+            raise OrsError(f"ORS geocode HTTP {resp.status_code}: {resp.text[:200]}")
+
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise OrsError(f"ORS geocode non-JSON: {resp.text[:200]}") from exc
+        if not isinstance(data, dict):
+            return []
+
+        results: list[GeocodeResult] = []
+        for feat in data.get("features", []):
+            if not isinstance(feat, dict):
+                continue
+            geom = feat.get("geometry") or {}
+            props = feat.get("properties") or {}
+            if not isinstance(geom, dict) or not isinstance(props, dict):
+                continue
+            coords = geom.get("coordinates")
+            if not isinstance(coords, list) or len(coords) < 2:
+                continue
+            try:
+                lon = float(coords[0])
+                lat = float(coords[1])
+            except (TypeError, ValueError):
+                continue
+            confidence_raw = props.get("confidence")
+            try:
+                confidence = float(confidence_raw) if confidence_raw is not None else None
+            except (TypeError, ValueError):
+                confidence = None
+            layer_raw = props.get("layer")
+            results.append(
+                GeocodeResult(
+                    name=str(props.get("name", "") or ""),
+                    label=str(props.get("label", "") or ""),
+                    lat=lat,
+                    lon=lon,
+                    layer=str(layer_raw) if layer_raw is not None else None,
+                    confidence=confidence,
+                )
+            )
+        return results
 
     async def directions(
         self,

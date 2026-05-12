@@ -1,0 +1,24 @@
+{# HTMX partial: rendered into #destination-hits by /plan/geocode. #}
+{% if error %}
+  <div class="flash error" style="margin: 0.5rem 0;">{{ error }}</div>
+{% elif hits %}
+  <ul class="geocode-hits" role="listbox">
+    {% for h in hits %}
+    <li>
+      <button type="button"
+              class="geocode-hit"
+              data-lat="{{ "%.6f"|format(h.lat) }}"
+              data-lon="{{ "%.6f"|format(h.lon) }}"
+              data-label="{{ h.label or h.name }}"
+              onclick="warrouteSelectGeocode(this)">
+        <span class="geocode-hit-name">{{ h.name or h.label or "(unnamed)" }}</span>
+        {% if h.label and h.label != h.name %}
+          <span class="geocode-hit-addr">{{ h.label }}</span>
+        {% endif %}
+      </button>
+    </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="geocode-empty">No matches. Try a more specific query.</div>
+{% endif %}

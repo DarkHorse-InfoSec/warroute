@@ -22,9 +22,31 @@
     </select>
   </div>
 
-  <div>
-    <label for="destination">Destination (oneway only) - "lat,lon"</label>
-    <input id="destination" name="destination" type="text" placeholder="44.94,-72.21" />
+  <div class="geocode-field">
+    <label for="destination_query">Destination (oneway only)</label>
+
+    <input id="destination_query"
+           name="destination_query"
+           type="search"
+           placeholder='e.g. "Kohls South Burlington VT" or "Mom and Dads house"'
+           hx-get="/plan/geocode"
+           hx-trigger="keyup changed delay:300ms, search"
+           hx-target="#destination-hits"
+           autocomplete="off"
+           inputmode="search" />
+
+    <div id="destination-hits" class="geocode-results"></div>
+
+    <input type="hidden" id="destination" name="destination" value="" />
+
+    <div id="destination-chosen" class="chosen-chip" hidden>
+      <span class="chip-pin" aria-hidden="true">PIN</span>
+      <span id="destination-chosen-label" class="chip-label"></span>
+      <button type="button"
+              class="chip-clear"
+              onclick="warrouteClearGeocode()"
+              aria-label="Clear destination">change</button>
+    </div>
   </div>
 
   <details>
@@ -45,6 +67,28 @@
 
   <button type="submit">Plan it</button>
 </form>
+
+<script>
+function warrouteSelectGeocode(btn) {
+  var lat = btn.dataset.lat;
+  var lon = btn.dataset.lon;
+  var label = btn.dataset.label || (lat + "," + lon);
+  document.getElementById("destination").value = lat + "," + lon;
+  document.getElementById("destination-chosen-label").textContent = label;
+  document.getElementById("destination-chosen").hidden = false;
+  document.getElementById("destination_query").hidden = true;
+  document.getElementById("destination-hits").innerHTML = "";
+}
+function warrouteClearGeocode() {
+  document.getElementById("destination").value = "";
+  document.getElementById("destination-chosen").hidden = true;
+  var q = document.getElementById("destination_query");
+  q.hidden = false;
+  q.value = "";
+  q.focus();
+  document.getElementById("destination-hits").innerHTML = "";
+}
+</script>
 
 <p style="color: var(--muted); font-size: 13px; margin-top: 1rem;">
   Reachable radius is computed at 40 km/h (rural). For loops, half the time is the outbound budget;

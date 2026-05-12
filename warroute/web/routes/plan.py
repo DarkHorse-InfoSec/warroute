@@ -5,9 +5,16 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
+from warroute.clients.ors import (
+    OrsAuthError,
+    OrsClient,
+    OrsError,
+    OrsQuotaError,
+    Waypoint,
+)
 from warroute.config import get_settings
 from warroute.router.gpx import google_maps_url, write_gpx
 from warroute.router.planner import PlannerError, PlanRequest
@@ -142,6 +149,38 @@ async def post_plan(
         route_geometry=geometry,
         maps_url=maps_url,
     )
+
+
+@router.get("/geocode", response_class=HTMLResponse)
+async def get_geocode_results(
+    request: Request,
+    q: Annotated[str, Query()] = "",
+) -> HTMLResponse:
+    """HTMX endpoint: return an HTML partial of geocoder hits for the type-ahead.
+
+    Empty / too-short queries return an empty body (clears the dropdown). Errors
+    render a small flash but never propagate — the form stays usable.
+    """
+    query = (q or "").strip()
+    if len(query) < 2:
+        return HTMLResponse("")
+
+    settings = get_settings()
+    focus = Waypoint(lat=settings.home_lat, lon=settings.home_lon)
+    try:
+        async with OrsClient() as ors:
+            hits = await ors.geocode(query, focus=focus, size=5)
+    except OrsAuthError:
+        return render(request, "geocode_results.html", hits=[], error="ORS auth error")
+    except OrsQuotaError:
+        return render(
+            request, "geocode_results.html", hits=[], error="ORS geocode quota exhausted today"
+        )
+    except OrsError as exc:
+        logger.warning("geocode failed for q=%r: %s", query, exc)
+        return render(request, "geocode_results.html", hits=[], error="Geocoder error")
+
+    return render(request, "geocode_results.html", hits=hits, error=None)
 
 
 @router.get("/{plan_id}/gpx", response_class=PlainTextResponse)

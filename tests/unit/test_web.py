@@ -90,6 +90,68 @@ def test_plan_invalid_mode(client: TestClient) -> None:
     assert "Invalid mode" in resp.text
 
 
+def test_plan_form_has_geocode_search_box(client: TestClient) -> None:
+    """The lat/lon destination input was replaced with an HTMX type-ahead."""
+    resp = client.get("/plan")
+    assert resp.status_code == 200
+    assert 'hx-get="/plan/geocode"' in resp.text
+    assert 'name="destination_query"' in resp.text
+    assert 'id="destination-hits"' in resp.text
+
+
+def test_geocode_short_query_returns_empty_body(client: TestClient) -> None:
+    """Queries under 2 chars must not hit ORS (saves quota on every keystroke)."""
+    resp = client.get("/plan/geocode", params={"q": "K"})
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+def test_geocode_empty_query_returns_empty_body(client: TestClient) -> None:
+    resp = client.get("/plan/geocode", params={"q": ""})
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+@respx.mock
+def test_geocode_returns_hits_as_html_partial(client: TestClient) -> None:
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "features": [
+                    {
+                        "geometry": {"type": "Point", "coordinates": [-73.21, 44.47]},
+                        "properties": {
+                            "name": "Kohl's",
+                            "label": "Kohl's, South Burlington, VT",
+                            "layer": "venue",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.get("/plan/geocode", params={"q": "Kohls"})
+    assert resp.status_code == 200
+    # Jinja2 auto-escapes the apostrophe; match the rest of the label instead.
+    assert "South Burlington" in resp.text
+    assert 'data-lat="44.470000"' in resp.text
+    assert 'data-lon="-73.210000"' in resp.text
+    assert 'onclick="warrouteSelectGeocode' in resp.text
+
+
+@respx.mock
+def test_geocode_quota_renders_error_partial(client: TestClient) -> None:
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    respx.get(ORS_API_BASE + GEOCODE_PATH).mock(return_value=httpx.Response(429))
+    resp = client.get("/plan/geocode", params={"q": "anywhere"})
+    assert resp.status_code == 200
+    assert "quota" in resp.text.lower()
+
+
 def test_coverage_renders_without_data(client: TestClient) -> None:
     resp = client.get("/coverage")
     assert resp.status_code == 200
