@@ -84,6 +84,74 @@ def test_plan_post_oneway_without_destination_errors(client: TestClient) -> None
     assert "destination" in resp.text.lower()
 
 
+@respx.mock
+def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient) -> None:
+    """If JS didn't set the hidden lat/lon, geocode the typed text server-side.
+
+    We don't seed the grid; the planner will fail with 'no scored cells' AFTER
+    geocoding the query. That tells us the destination-resolution path worked.
+    """
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "features": [
+                    {
+                        "geometry": {"type": "Point", "coordinates": [-72.30, 44.92]},
+                        "properties": {
+                            "name": "Kohl's",
+                            "label": "Kohl's, Burlington, VT",
+                            "layer": "venue",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    # No `destination` hidden value, only `destination_query` typed text.
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "60",
+            "mode": "oneway",
+            "destination": "",
+            "destination_query": "Kohls Burlington VT",
+        },
+    )
+    assert resp.status_code == 200
+    # The geocoder was actually called by the fallback path.
+    assert geocode_route.called
+    # We did NOT bail with "needs a destination" — the fallback resolved it.
+    assert "needs a destination" not in resp.text
+    # Planning fails later (no cells seeded), but that's a different error path.
+    assert "No scored cells" in resp.text
+
+
+@respx.mock
+def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient) -> None:
+    """When the hidden destination field is set, don't call the geocoder."""
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(200, json={"features": []})
+    )
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "60",
+            "mode": "oneway",
+            "destination": "44.5,-73.2",
+            "destination_query": "noise that should be ignored",
+        },
+    )
+    assert resp.status_code == 200
+    assert not geocode_route.called
+    # Should bail with no-cells (planner), not destination error.
+    assert "No scored cells" in resp.text
+
+
 def test_plan_invalid_mode(client: TestClient) -> None:
     resp = client.post("/plan", data={"duration_min": "60", "mode": "bogus"})
     assert resp.status_code == 200

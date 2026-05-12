@@ -50,6 +50,7 @@ async def post_plan(
     home_lat: Annotated[float | None, Form()] = None,
     home_lon: Annotated[float | None, Form()] = None,
     destination: Annotated[str | None, Form()] = None,
+    destination_query: Annotated[str | None, Form()] = None,
 ) -> HTMLResponse:
     settings = get_settings()
     if mode not in ("loop", "oneway"):
@@ -66,23 +67,34 @@ async def post_plan(
 
     dest_lat: float | None = None
     dest_lon: float | None = None
+    resolved_destination_label: str | None = None
     if mode == "oneway":
-        if not destination or "," not in destination:
-            return render(
-                request,
-                "plan_form.html",
-                defaults={
-                    "duration_min": duration_min,
-                    "home_lat": home_lat or settings.home_lat,
-                    "home_lon": home_lon or settings.home_lon,
-                },
-                error="oneway mode needs a destination as 'lat,lon'",
+        # Path 1: hidden field populated by the type-ahead JS ("lat,lon").
+        if destination and "," in destination:
+            try:
+                lat_s, lon_s = destination.split(",", 1)
+                dest_lat = float(lat_s)
+                dest_lon = float(lon_s)
+            except ValueError:
+                dest_lat = None
+                dest_lon = None
+        # Path 2: user typed but didn't tap a result (or hidden parse failed) —
+        # resolve the typed text via geocoder and use the first hit.
+        if (dest_lat is None or dest_lon is None) and destination_query and destination_query.strip():
+            focus = Waypoint(
+                lat=home_lat if home_lat is not None else settings.home_lat,
+                lon=home_lon if home_lon is not None else settings.home_lon,
             )
-        try:
-            lat_s, lon_s = destination.split(",")
-            dest_lat = float(lat_s)
-            dest_lon = float(lon_s)
-        except ValueError:
+            try:
+                async with OrsClient() as ors:
+                    hits = await ors.geocode(destination_query.strip(), focus=focus, size=1)
+                if hits:
+                    dest_lat = hits[0].lat
+                    dest_lon = hits[0].lon
+                    resolved_destination_label = hits[0].label or hits[0].name
+            except OrsError as exc:
+                logger.warning("destination geocode fallback failed for %r: %s", destination_query, exc)
+        if dest_lat is None or dest_lon is None:
             return render(
                 request,
                 "plan_form.html",
@@ -91,7 +103,10 @@ async def post_plan(
                     "home_lat": home_lat or settings.home_lat,
                     "home_lon": home_lon or settings.home_lon,
                 },
-                error="destination must be 'lat,lon' with two numbers",
+                error=(
+                    "oneway mode needs a destination - type a place name and tap a match,"
+                    " or paste 'lat,lon' coordinates"
+                ),
             )
 
     req = PlanRequest(
@@ -148,6 +163,7 @@ async def post_plan(
         waypoints_geojson=waypoints_geojson,
         route_geometry=geometry,
         maps_url=maps_url,
+        resolved_destination_label=resolved_destination_label,
     )
 
 
