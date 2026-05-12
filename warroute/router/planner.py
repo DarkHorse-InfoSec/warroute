@@ -108,7 +108,11 @@ async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult
     home = Waypoint(request.home_lat, request.home_lon, label="Home")
     end = request.end_waypoint()
 
-    chosen = candidates[:MAX_OPTIMIZATION_JOBS]
+    # Right-size the initial cell count to the budget. A 20-min plan can't fit
+    # 25 cells; starting with 25 just burns ORS calls on doomed iterations.
+    # Heuristic: ~1 cell per 8 minutes of budget (with rural back-and-forth).
+    est_initial = max(MIN_WAYPOINTS, min(MAX_OPTIMIZATION_JOBS, request.duration_min // 8))
+    chosen = candidates[:est_initial]
     drops: list[str] = []
 
     async with OrsClient() as ors:
@@ -220,24 +224,42 @@ async def _solve_with_backoff(
     request: PlanRequest,
     drops: list[str],
 ) -> tuple[RouteLeg, list[CellScore]]:
-    """Call /optimization; if over budget, drop the lowest-scoring cell and retry."""
+    """Call /optimization; if over budget, halve the cell list and retry.
+
+    Halve-style back-off bounds the call count at ceil(log2(N)) instead of N.
+    Critical for ORS's 40-calls-per-minute rate limit: a 25-cell drop-one back-off
+    burns ~70 calls/min mid-plan, hitting 429 quickly.
+    """
     budget_s = request.duration_min * 60 * (1 + DURATION_SLACK)
+    last_leg: RouteLeg | None = None
     while len(chosen) >= MIN_WAYPOINTS:
         jobs = [Waypoint(c.center_lat, c.center_lon, label=c.cell_id) for c in chosen]
         leg = await ors.optimize(start=home, jobs=jobs, end=end)
+        last_leg = leg
         if leg.duration_s <= budget_s:
-            # Reorder chosen to match ORS's optimized job ordering.
             ordered = [chosen[i] for i in leg.waypoint_order if 0 <= i < len(chosen)]
             return leg, ordered
-        dropped = chosen.pop()
-        drops.append(dropped.cell_id)
+        # Halve the chosen list (keep the higher-scoring half).
+        new_len = max(MIN_WAYPOINTS, len(chosen) // 2)
+        dropped_cells = chosen[new_len:]
+        drops.extend(c.cell_id for c in dropped_cells)
+        chosen = chosen[:new_len]
         logger.info(
-            "Plan over budget (%.1f > %.1f min); dropped cell %s, retrying with %d cells",
+            "Plan over budget (%.1f > %.1f min); halved to %d cells",
             leg.duration_min,
             budget_s / 60,
-            dropped.cell_id,
             len(chosen),
         )
+        # If we just halved down to MIN_WAYPOINTS and it still overshot, no more iters left
+        # — exit loop so we don't re-call with the same cells (the previous iteration's leg
+        # is still our best info, and we'll raise after).
+        if len(chosen) == MIN_WAYPOINTS and new_len == len(chosen) and leg.duration_s > budget_s:
+            break
+    if last_leg is not None and last_leg.duration_s <= budget_s * 1.2:
+        # Edge: last_leg was 20% over budget but we ran out of cells to drop. Accept it
+        # with a small slack rather than fail entirely.
+        ordered = [chosen[i] for i in last_leg.waypoint_order if 0 <= i < len(chosen)]
+        return last_leg, ordered
     raise PlannerError(
         f"Could not fit any plan in {request.duration_min} min budget; tried backing off."
     )
