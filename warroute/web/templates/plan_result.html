@@ -28,6 +28,12 @@
   </div>
 </div>
 
+{% if direct_fallback_notice %}
+<div class="flash warn">
+  {{ direct_fallback_notice }}
+</div>
+{% endif %}
+
 {% if resolved_start_label %}
 <div class="flash info">
   Start resolved to: <strong>{{ resolved_start_label }}</strong>
@@ -56,6 +62,7 @@
   <a class="btn secondary" href="/plan">Plan another</a>
 </p>
 
+{% if result.chosen_cells %}
 <h2>Picked cells</h2>
 <table>
   <thead>
@@ -85,6 +92,7 @@
     {% endfor %}
   </tbody>
 </table>
+{% endif %}
 
 <script>
 window.addEventListener("DOMContentLoaded", function () {

@@ -132,8 +132,9 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
     assert geocode_route.called
     # We did NOT bail with "needs a destination" — the fallback resolved it.
     assert "needs a destination" not in resp.text
-    # Planning fails later (no cells seeded), but that's a different error path.
-    assert "No scored cells" in resp.text
+    # Planner has no cells -> oneway gracefully falls back to direct route.
+    assert "direct route" in resp.text.lower()
+    assert "Plan #" in resp.text
 
 
 @respx.mock
@@ -164,8 +165,10 @@ def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient
     )
     assert resp.status_code == 200
     assert not geocode_route.called
-    # Should bail with no-cells (planner), not destination error.
-    assert "No scored cells" in resp.text
+    # Planner has no cells -> falls back to direct route. The hidden field was used
+    # (not the query) and the destination resolved into the direct leg.
+    assert "Plan #" in resp.text
+    assert "direct route" in resp.text.lower()
 
 
 def test_plan_form_has_start_search_box(client: TestClient) -> None:
@@ -320,6 +323,62 @@ def test_plan_post_rejects_budget_smaller_than_direct_drive(client: TestClient) 
     assert resp.status_code == 200
     assert "min away by direct drive" in resp.text
     assert "Increase the budget" in resp.text
+
+
+@respx.mock
+def test_plan_post_falls_back_to_direct_route_when_no_cells_fit(
+    client: TestClient,
+) -> None:
+    """When the planner can't fit any cells in the budget, oneway plans fall back
+    to a direct-only route instead of erroring. User still gets a GMaps link."""
+    from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
+
+    # No cells seeded -> planner will raise "no scored cells" PlannerError.
+    # Directions mock provides the direct leg for the fallback.
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "summary": {"distance": 5000, "duration": 600},
+                        "geometry": "encoded_polyline",
+                    }
+                ]
+            },
+        )
+    )
+    # Optimization mock not strictly needed (planner fails before calling it)
+    # but included so respx doesn't error if the planner does try.
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(return_value=httpx.Response(200, json={}))
+
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "20",
+            "mode": "oneway",
+            "destination": "44.96,-72.10",
+            "destination_query": "",
+        },
+    )
+    assert resp.status_code == 200
+    # The plan_result page rendered (not the form with an error).
+    assert "Plan #" in resp.text
+    # And the user sees a clear notice explaining why there are no cells.
+    assert "direct route" in resp.text.lower()
+    assert "Could not fit" in resp.text
+
+
+@respx.mock
+def test_plan_post_loop_with_no_cells_suggests_longer_budget(client: TestClient) -> None:
+    """Loop mode has no destination, so direct-route fallback doesn't apply.
+    The error message should at least tell the user to try a longer budget."""
+    resp = client.post(
+        "/plan",
+        data={"duration_min": "20", "mode": "loop", "start": "", "start_query": ""},
+    )
+    assert resp.status_code == 200
+    assert "longer time budget" in resp.text or "increase" in resp.text.lower()
 
 
 @respx.mock

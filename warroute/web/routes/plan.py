@@ -13,12 +13,17 @@ from warroute.clients.ors import (
     OrsClient,
     OrsError,
     OrsQuotaError,
+    RouteLeg,
     Waypoint,
     haversine_km,
 )
 from warroute.config import get_settings
 from warroute.router.gpx import google_maps_url, write_gpx
-from warroute.router.planner import PlannerError, PlanRequest
+from warroute.router.planner import (
+    PlannerError,
+    PlanRequest,
+    persist_direct_route,
+)
 from warroute.router.planner import plan as run_plan
 from warroute.web.templating import render
 
@@ -177,10 +182,12 @@ async def post_plan(
                 ),
             )
 
-    # For oneway plans, fetch the direct-route time first. This lets us:
+    # For oneway plans, fetch the direct-route geometry first. This lets us:
     #   1. Reject budgets that can't even reach the destination (with a useful message)
     #   2. Show the user the direct vs detour breakdown on the result page
-    # The planner will still back off cells to fit within `duration_min`.
+    #   3. Gracefully fall back to a direct-only plan when no cells fit in budget
+    # Geometry is captured so the fallback can render a real polyline (vs straight line).
+    direct_leg: RouteLeg | None = None
     direct_min: float | None = None
     if mode == "oneway" and dest_lat is not None and dest_lon is not None:
         try:
@@ -190,7 +197,7 @@ async def post_plan(
                         Waypoint(start_lat, start_lon, label="start"),
                         Waypoint(dest_lat, dest_lon, label="dest"),
                     ],
-                    with_geometry=False,
+                    with_geometry=True,
                 )
             direct_min = direct_leg.duration_s / 60.0
         except OrsQuotaError:
@@ -217,19 +224,45 @@ async def post_plan(
         # Plumb direct_min into PlanRequest so the planner's corridor filter kicks in.
         req.direct_min = direct_min
 
+    direct_fallback_notice: str | None = None
     try:
         result = await run_plan(req)
     except PlannerError as exc:
-        return render(
-            request,
-            "plan_form.html",
-            defaults={
-                "duration_min": duration_min,
-                "home_lat": req.home_lat,
-                "home_lon": req.home_lon,
-            },
-            error=str(exc),
-        )
+        # Graceful fallback: if this is oneway and we have the direct-route leg,
+        # build a 0-cell plan so the user still gets a Google Maps deep-link to
+        # their destination instead of a dead-end error.
+        if mode == "oneway" and direct_leg is not None:
+            result = persist_direct_route(req, direct_leg)
+            if direct_min is not None:
+                direct_fallback_notice = (
+                    f"Could not fit any AP-scanning detour in your {duration_min} min budget."
+                    f" Showing the direct route ({direct_min:.0f} min)."
+                    f" Increase the budget to add detour cells."
+                )
+            else:
+                direct_fallback_notice = (
+                    f"Could not fit any AP-scanning detour in your {duration_min} min budget."
+                    f" Showing the direct route. Increase the budget to add detour cells."
+                )
+        else:
+            return render(
+                request,
+                "plan_form.html",
+                defaults={
+                    "duration_min": duration_min,
+                    "home_lat": req.home_lat,
+                    "home_lon": req.home_lon,
+                },
+                error=(
+                    f"{exc}"
+                    + (
+                        " (try a longer time budget — your area may not have"
+                        " scored cells within reach)"
+                        if mode == "loop"
+                        else ""
+                    )
+                ),
+            )
     except OrsQuotaError:
         return render(
             request,
@@ -303,6 +336,7 @@ async def post_plan(
         resolved_start_label=resolved_start_label,
         resolved_destination_label=resolved_destination_label,
         direct_min=direct_min,
+        direct_fallback_notice=direct_fallback_notice,
     )
 
 

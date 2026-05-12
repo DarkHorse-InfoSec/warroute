@@ -265,6 +265,31 @@ async def _solve_with_backoff(
     )
 
 
+def persist_direct_route(request: PlanRequest, direct_leg: RouteLeg) -> PlanResult:
+    """Build a 0-cell PlanResult that's just the direct drive home -> destination.
+
+    Used as the graceful fallback when no AP-scanning detour fits in the budget,
+    so the user still gets to their destination with a Google Maps link instead
+    of a hard error. Only valid for oneway plans (destination required).
+    """
+    if request.destination_lat is None or request.destination_lon is None:
+        raise PlannerError("Direct-only fallback requires destination_lat + destination_lon")
+    home = Waypoint(request.home_lat, request.home_lon, label="Home")
+    end = Waypoint(request.destination_lat, request.destination_lon, label="Destination")
+    waypoints = [home, end]
+    plan_id = _persist_plan(request, waypoints, direct_leg, estimated_new_aps=0)
+    return PlanResult(
+        request=request,
+        chosen_cells=[],
+        ordered_waypoints=waypoints,
+        leg=direct_leg,
+        geometry=direct_leg.geometry,
+        estimated_new_aps=0,
+        planned_route_id=plan_id,
+        drops_for_slack=[],
+    )
+
+
 def _persist_plan(
     request: PlanRequest,
     waypoints: list[Waypoint],
