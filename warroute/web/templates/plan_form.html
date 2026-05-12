@@ -22,13 +22,40 @@
     </select>
   </div>
 
-  <div class="geocode-field">
-    <label for="destination_query">Destination (oneway only)</label>
+  <div class="geocode-field" data-field="start">
+    <label for="start_query">Starting location <span class="muted">(blank = home)</span></label>
+
+    <input id="start_query"
+           name="start_query"
+           type="search"
+           placeholder='e.g. "907 Smart St Newport VT" — leave blank to start from home'
+           hx-get="/plan/geocode"
+           hx-trigger="keyup changed delay:300ms, search"
+           hx-target="#start-hits"
+           autocomplete="off"
+           inputmode="search" />
+
+    <div id="start-hits" class="geocode-results"></div>
+
+    <input type="hidden" id="start" name="start" value="" />
+
+    <div id="start-chosen" class="chosen-chip" hidden>
+      <span class="chip-pin" aria-hidden="true">PIN</span>
+      <span id="start-chosen-label" class="chip-label"></span>
+      <button type="button"
+              class="chip-clear"
+              onclick="warrouteClearGeocode('start')"
+              aria-label="Clear starting location">change</button>
+    </div>
+  </div>
+
+  <div class="geocode-field" data-field="destination">
+    <label for="destination_query">Destination <span class="muted">(oneway only)</span></label>
 
     <input id="destination_query"
            name="destination_query"
            type="search"
-           placeholder='e.g. "Kohls South Burlington VT" or "Mom and Dads house"'
+           placeholder='e.g. "Kohls South Burlington VT" or "Pick and Shovel Newport VT"'
            hx-get="/plan/geocode"
            hx-trigger="keyup changed delay:300ms, search"
            hx-target="#destination-hits"
@@ -44,16 +71,14 @@
       <span id="destination-chosen-label" class="chip-label"></span>
       <button type="button"
               class="chip-clear"
-              onclick="warrouteClearGeocode()"
+              onclick="warrouteClearGeocode('destination')"
               aria-label="Clear destination">change</button>
     </div>
   </div>
 
   <details>
-    <summary style="color: var(--muted); cursor: pointer; min-height: 44px; display: flex; align-items: center;">
-      Override home location
-    </summary>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-top: 0.5rem;">
+    <summary class="advanced-summary">Advanced: raw lat/lon override for home</summary>
+    <div class="advanced-grid">
       <div>
         <label for="home_lat">Lat</label>
         <input id="home_lat" name="home_lat" type="text" value="{{ defaults.home_lat }}" />
@@ -69,24 +94,30 @@
 </form>
 
 <script>
+// Generic helpers shared by all .geocode-field blocks (start, destination, ...).
+// Each block has data-field="<name>" on the wrapper; hidden input id=name; visible
+// input id=name+"_query"; chip parts use name+"-chosen"/-label/-hits ids.
 function warrouteSelectGeocode(btn) {
+  var fieldEl = btn.closest('.geocode-field');
+  if (!fieldEl) { return; }
+  var name = fieldEl.dataset.field;
   var lat = btn.dataset.lat;
   var lon = btn.dataset.lon;
   var label = btn.dataset.label || (lat + "," + lon);
-  document.getElementById("destination").value = lat + "," + lon;
-  document.getElementById("destination-chosen-label").textContent = label;
-  document.getElementById("destination-chosen").hidden = false;
-  document.getElementById("destination_query").hidden = true;
-  document.getElementById("destination-hits").innerHTML = "";
+  document.getElementById(name).value = lat + "," + lon;
+  document.getElementById(name + "-chosen-label").textContent = label;
+  document.getElementById(name + "-chosen").hidden = false;
+  document.getElementById(name + "_query").hidden = true;
+  document.getElementById(name + "-hits").innerHTML = "";
 }
-function warrouteClearGeocode() {
-  document.getElementById("destination").value = "";
-  document.getElementById("destination-chosen").hidden = true;
-  var q = document.getElementById("destination_query");
+function warrouteClearGeocode(name) {
+  document.getElementById(name).value = "";
+  document.getElementById(name + "-chosen").hidden = true;
+  var q = document.getElementById(name + "_query");
   q.hidden = false;
   q.value = "";
   q.focus();
-  document.getElementById("destination-hits").innerHTML = "";
+  document.getElementById(name + "-hits").innerHTML = "";
 }
 </script>
 

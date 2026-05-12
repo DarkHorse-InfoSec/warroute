@@ -152,6 +152,82 @@ def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient
     assert "No scored cells" in resp.text
 
 
+def test_plan_form_has_start_search_box(client: TestClient) -> None:
+    """Starting location is now a type-ahead, mirroring destination."""
+    resp = client.get("/plan")
+    assert resp.status_code == 200
+    assert 'name="start_query"' in resp.text
+    assert 'id="start-hits"' in resp.text
+    assert 'data-field="start"' in resp.text
+    assert 'data-field="destination"' in resp.text
+
+
+@respx.mock
+def test_plan_post_loop_uses_start_typed_query_via_geocoder(client: TestClient) -> None:
+    """User types a starting address (not at home), didn't tap a hit."""
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "features": [
+                    {
+                        "geometry": {"type": "Point", "coordinates": [-73.10, 44.50]},
+                        "properties": {"name": "907 Smart St", "label": "907 Smart St, Newport, VT"},
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "60",
+            "mode": "loop",
+            "start": "",
+            "start_query": "907 Smart St Newport VT",
+        },
+    )
+    assert resp.status_code == 200
+    assert geocode_route.called
+    # Planner fails downstream (no cells) but the start path succeeded.
+    assert "No scored cells" in resp.text
+
+
+@respx.mock
+def test_plan_post_explicit_start_skips_geocoder(client: TestClient) -> None:
+    """When the hidden start field has 'lat,lon', the geocoder is not called."""
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(200, json={"features": []})
+    )
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "60",
+            "mode": "loop",
+            "start": "44.99,-72.13",
+            "start_query": "ignored noise",
+        },
+    )
+    assert resp.status_code == 200
+    assert not geocode_route.called
+    assert "No scored cells" in resp.text
+
+
+def test_plan_post_blank_start_uses_settings_home(client: TestClient) -> None:
+    """Empty start fields fall back to .env home — no geocoder call needed."""
+    # No respx.mock decorator: this should NOT hit the network.
+    resp = client.post(
+        "/plan",
+        data={"duration_min": "60", "mode": "loop", "start": "", "start_query": ""},
+    )
+    assert resp.status_code == 200
+    assert "No scored cells" in resp.text
+
+
 def test_plan_invalid_mode(client: TestClient) -> None:
     resp = client.post("/plan", data={"duration_min": "60", "mode": "bogus"})
     assert resp.status_code == 200

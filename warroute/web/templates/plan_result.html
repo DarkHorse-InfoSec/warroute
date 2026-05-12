@@ -22,6 +22,12 @@
   </div>
 </div>
 
+{% if resolved_start_label %}
+<div class="flash info">
+  Start resolved to: <strong>{{ resolved_start_label }}</strong>
+</div>
+{% endif %}
+
 {% if resolved_destination_label %}
 <div class="flash info">
   Destination resolved to: <strong>{{ resolved_destination_label }}</strong>

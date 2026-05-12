@@ -242,6 +242,25 @@ input[type="range"] { padding: 0; }
 }
 .chosen-chip .chip-clear:hover { background: var(--panel); }
 
+label .muted, span.muted { color: var(--muted); font-weight: normal; text-transform: none; letter-spacing: 0; }
+
+.advanced-summary {
+  color: var(--muted);
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.advanced-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 button, .btn {
   display: inline-flex;
   align-items: center;

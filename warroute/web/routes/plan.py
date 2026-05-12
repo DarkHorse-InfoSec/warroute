@@ -47,6 +47,8 @@ async def post_plan(
     request: Request,
     duration_min: Annotated[int, Form()] = 90,
     mode: Annotated[str, Form()] = "loop",
+    start: Annotated[str | None, Form()] = None,
+    start_query: Annotated[str | None, Form()] = None,
     home_lat: Annotated[float | None, Form()] = None,
     home_lon: Annotated[float | None, Form()] = None,
     destination: Annotated[str | None, Form()] = None,
@@ -65,6 +67,37 @@ async def post_plan(
             error=f"Invalid mode '{mode}'",
         )
 
+    # Resolve START location. Priority:
+    #   1. `start` hidden field ("lat,lon" from type-ahead tap)
+    #   2. `start_query` typed text (geocoded server-side)
+    #   3. `home_lat`/`home_lon` legacy power-user override fields
+    #   4. settings.home_lat / settings.home_lon (.env default)
+    start_lat: float | None = None
+    start_lon: float | None = None
+    resolved_start_label: str | None = None
+    if start and "," in start:
+        try:
+            lat_s, lon_s = start.split(",", 1)
+            start_lat = float(lat_s)
+            start_lon = float(lon_s)
+        except ValueError:
+            start_lat = None
+            start_lon = None
+    if (start_lat is None or start_lon is None) and start_query and start_query.strip():
+        focus = Waypoint(lat=settings.home_lat, lon=settings.home_lon)
+        try:
+            async with OrsClient() as ors:
+                hits = await ors.geocode(start_query.strip(), focus=focus, size=1)
+            if hits:
+                start_lat = hits[0].lat
+                start_lon = hits[0].lon
+                resolved_start_label = hits[0].label or hits[0].name
+        except OrsError as exc:
+            logger.warning("start geocode fallback failed for %r: %s", start_query, exc)
+    if start_lat is None or start_lon is None:
+        start_lat = home_lat if home_lat is not None else settings.home_lat
+        start_lon = home_lon if home_lon is not None else settings.home_lon
+
     dest_lat: float | None = None
     dest_lon: float | None = None
     resolved_destination_label: str | None = None
@@ -79,12 +112,10 @@ async def post_plan(
                 dest_lat = None
                 dest_lon = None
         # Path 2: user typed but didn't tap a result (or hidden parse failed) —
-        # resolve the typed text via geocoder and use the first hit.
+        # resolve the typed text via geocoder and use the first hit. Focus bias
+        # on the resolved start so "Pizza Hut" near origin ranks above globally.
         if (dest_lat is None or dest_lon is None) and destination_query and destination_query.strip():
-            focus = Waypoint(
-                lat=home_lat if home_lat is not None else settings.home_lat,
-                lon=home_lon if home_lon is not None else settings.home_lon,
-            )
+            focus = Waypoint(lat=start_lat, lon=start_lon)
             try:
                 async with OrsClient() as ors:
                     hits = await ors.geocode(destination_query.strip(), focus=focus, size=1)
@@ -110,8 +141,8 @@ async def post_plan(
             )
 
     req = PlanRequest(
-        home_lat=home_lat if home_lat is not None else settings.home_lat,
-        home_lon=home_lon if home_lon is not None else settings.home_lon,
+        home_lat=start_lat,
+        home_lon=start_lon,
         duration_min=duration_min,
         mode=mode,
         destination_lat=dest_lat,
@@ -163,6 +194,7 @@ async def post_plan(
         waypoints_geojson=waypoints_geojson,
         route_geometry=geometry,
         maps_url=maps_url,
+        resolved_start_label=resolved_start_label,
         resolved_destination_label=resolved_destination_label,
     )
 
