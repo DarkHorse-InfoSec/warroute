@@ -6,12 +6,23 @@
     {% for h in hits %}
     <li>
       <button type="button"
-              class="geocode-hit"
+              class="geocode-hit{% if h.distance_km and h.distance_km > 200 %} far{% endif %}"
               data-lat="{{ "%.6f"|format(h.lat) }}"
               data-lon="{{ "%.6f"|format(h.lon) }}"
               data-label="{{ h.label or h.name }}"
               onclick="warrouteSelectGeocode(this)">
-        <span class="geocode-hit-name">{{ h.name or h.label or "(unnamed)" }}</span>
+        <span class="geocode-hit-name">
+          {{ h.name or h.label or "(unnamed)" }}
+          {% if h.distance_km is not none %}
+            <span class="geocode-hit-dist">
+              {% if h.distance_km < 1 %}{{ (h.distance_km * 1000)|int }} m
+              {% elif h.distance_km < 10 %}{{ "%.1f"|format(h.distance_km) }} km
+              {% else %}{{ h.distance_km|int }} km
+              {% endif %}
+              away
+            </span>
+          {% endif %}
+        </span>
         {% if h.label and h.label != h.name %}
           <span class="geocode-hit-addr">{{ h.label }}</span>
         {% endif %}

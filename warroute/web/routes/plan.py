@@ -14,6 +14,7 @@ from warroute.clients.ors import (
     OrsError,
     OrsQuotaError,
     Waypoint,
+    haversine_km,
 )
 from warroute.config import get_settings
 from warroute.router.gpx import google_maps_url, write_gpx
@@ -149,6 +150,32 @@ async def post_plan(
         destination_lon=dest_lon,
     )
 
+    # Sanity check: if the geocoder returned a destination way outside the budget's
+    # reachable radius, bail with a clear message naming the bad match. This catches
+    # cases like "Pick and Shovel Newport VT" -> "Pick and Shovel Mine, CA" (4400 km away).
+    if dest_lat is not None and dest_lon is not None:
+        reachable_km = req.reachable_radius_km()
+        # 2x slack: allow destinations up to 2x reachable (back-roads, longer routes)
+        max_dist_km = max(reachable_km * 2.0, 50.0)
+        dest_dist_km = haversine_km(start_lat, start_lon, dest_lat, dest_lon)
+        if dest_dist_km > max_dist_km:
+            picked = resolved_destination_label or f"{dest_lat:.4f},{dest_lon:.4f}"
+            return render(
+                request,
+                "plan_form.html",
+                defaults={
+                    "duration_min": duration_min,
+                    "home_lat": req.home_lat,
+                    "home_lon": req.home_lon,
+                },
+                error=(
+                    f"Destination is {dest_dist_km:.0f} km from start - far beyond the "
+                    f"{duration_min} min budget ({reachable_km:.0f} km reachable). "
+                    f"Geocoder picked: {picked}. Try a more specific query, increase the "
+                    f"duration, or tap a closer match in the dropdown."
+                ),
+            )
+
     try:
         result = await run_plan(req)
     except PlannerError as exc:
@@ -161,6 +188,44 @@ async def post_plan(
                 "home_lon": req.home_lon,
             },
             error=str(exc),
+        )
+    except OrsQuotaError:
+        return render(
+            request,
+            "plan_form.html",
+            defaults={
+                "duration_min": duration_min,
+                "home_lat": req.home_lat,
+                "home_lon": req.home_lon,
+            },
+            error=(
+                "ORS quota or rate limit hit. Wait ~60s and try again, or check"
+                " your daily quota at https://openrouteservice.org/dev"
+                " (free tier: 500 optimize/day, 40/min)."
+            ),
+        )
+    except OrsAuthError:
+        return render(
+            request,
+            "plan_form.html",
+            defaults={
+                "duration_min": duration_min,
+                "home_lat": req.home_lat,
+                "home_lon": req.home_lon,
+            },
+            error="ORS rejected the API key. Check ORS_API_KEY in .env.",
+        )
+    except OrsError as exc:
+        logger.warning("ORS error during planning: %s", exc)
+        return render(
+            request,
+            "plan_form.html",
+            defaults={
+                "duration_min": duration_min,
+                "home_lat": req.home_lat,
+                "home_lon": req.home_lon,
+            },
+            error=f"Routing service error: {exc}",
         )
 
     waypoints_geojson = {

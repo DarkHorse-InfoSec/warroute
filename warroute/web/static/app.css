@@ -193,13 +193,33 @@ input[type="range"] { padding: 0; }
   color: var(--fg);
   outline: none;
 }
-.geocode-hit-name { display: block; font-weight: 600; color: var(--accent); }
+.geocode-hit-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5em;
+  font-weight: 600;
+  color: var(--accent);
+}
 .geocode-hit-addr {
   display: block;
   margin-top: 0.15em;
   color: var(--muted);
   font-size: 13px;
 }
+.geocode-hit-dist {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--panel);
+  padding: 0.1em 0.5em;
+  border-radius: 999px;
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+.geocode-hit.far .geocode-hit-dist { color: var(--warn); }
+.geocode-hit.far { border-left: 3px solid var(--warn); }
 .geocode-empty {
   padding: 0.6rem 0.85rem;
   color: var(--muted);

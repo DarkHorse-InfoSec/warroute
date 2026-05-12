@@ -273,6 +273,33 @@ async def test_geocode_request_error_includes_exception_type() -> None:
 
 
 @respx.mock
+async def test_geocode_includes_distance_km_when_focus_given() -> None:
+    """Each hit should carry haversine distance from the focus point."""
+    respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(200, json=_GEOCODE_SAMPLE)
+    )
+    home = _wp(44.94, -72.21)
+    async with OrsClient() as ors:
+        hits = await ors.geocode("anywhere", focus=home)
+    # First hit at (44.4759, -73.2127) is roughly ~85 km from home.
+    assert hits[0].distance_km is not None
+    assert 70 < hits[0].distance_km < 100
+    # Second hit at (44.2, -72.5) is closer.
+    assert hits[1].distance_km is not None
+    assert hits[1].distance_km < hits[0].distance_km
+
+
+@respx.mock
+async def test_geocode_distance_is_none_without_focus() -> None:
+    respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(200, json=_GEOCODE_SAMPLE)
+    )
+    async with OrsClient() as ors:
+        hits = await ors.geocode("anywhere")  # no focus
+    assert all(h.distance_km is None for h in hits)
+
+
+@respx.mock
 async def test_geocode_skips_malformed_features() -> None:
     payload = {
         "features": [

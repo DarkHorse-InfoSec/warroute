@@ -142,7 +142,9 @@ def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient
         data={
             "duration_min": "60",
             "mode": "oneway",
-            "destination": "44.5,-73.2",
+            # Close enough to home that the distance pre-check doesn't reject it,
+            # so the test actually exercises the "hidden field beats query" path.
+            "destination": "44.96,-72.20",
             "destination_query": "noise that should be ignored",
         },
     )
@@ -226,6 +228,69 @@ def test_plan_post_blank_start_uses_settings_home(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert "No scored cells" in resp.text
+
+
+@respx.mock
+def test_plan_post_oneway_rejects_destination_beyond_reachable_radius(
+    client: TestClient,
+) -> None:
+    """The classic 'Pick and Shovel Newport VT' bug: geocoder returns a Pick-and-Shovel
+    in California (~4400 km away). The route handler should reject this with a clear
+    message naming the bad match instead of running the planner against an absurd target.
+    """
+    from warroute.clients.ors import GEOCODE_PATH, ORS_API_BASE
+
+    respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "features": [
+                    {
+                        "geometry": {
+                            "type": "Point",
+                            "coordinates": [-120.674761, 35.354927],  # San Luis Obispo CA
+                        },
+                        "properties": {
+                            "name": "Pick and Shovel",
+                            "label": "Pick And Shovel, San Luis Obispo County, CA, USA",
+                            "layer": "venue",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "120",
+            "mode": "oneway",
+            "start": "",
+            "start_query": "",
+            "destination": "",
+            "destination_query": "Pick and Shovel Newport VT",
+        },
+    )
+    assert resp.status_code == 200
+    assert "far beyond" in resp.text or "beyond" in resp.text
+    assert "San Luis Obispo" in resp.text  # surfaces the bad match
+    # Did NOT proceed to call ORS optimization with a 4400km destination.
+    assert "Plan #" not in resp.text
+
+
+@respx.mock
+def test_plan_post_renders_friendly_error_on_ors_429(client: TestClient) -> None:
+    """OrsQuotaError from the planner must not bubble up as a 500."""
+    from warroute.clients.ors import OPTIMIZATION_PATH, ORS_API_BASE
+
+    _seed_grid()  # planner gets past the no-cells check
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(return_value=httpx.Response(429))
+    resp = client.post(
+        "/plan",
+        data={"duration_min": "60", "mode": "loop", "start": "", "start_query": ""},
+    )
+    assert resp.status_code == 200  # NOT 500 — friendly form re-render
+    assert "ORS quota" in resp.text or "rate limit" in resp.text
 
 
 def test_plan_invalid_mode(client: TestClient) -> None:

@@ -14,6 +14,7 @@ Docs: https://openrouteservice.org/dev/#/api-docs
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,7 @@ class GeocodeResult:
     lon: float
     layer: str | None = None  # venue, address, locality, region, etc.
     confidence: float | None = None  # 0.0-1.0 from Pelias
+    distance_km: float | None = None  # great-circle from the geocode focus point
 
 
 @dataclass
@@ -214,6 +216,7 @@ class OrsClient:
             except (TypeError, ValueError):
                 confidence = None
             layer_raw = props.get("layer")
+            distance_km = haversine_km(focus.lat, focus.lon, lat, lon) if focus is not None else None
             results.append(
                 GeocodeResult(
                     name=str(props.get("name", "") or ""),
@@ -222,6 +225,7 @@ class OrsClient:
                     lon=lon,
                     layer=str(layer_raw) if layer_raw is not None else None,
                     confidence=confidence,
+                    distance_km=distance_km,
                 )
             )
         return results
@@ -300,3 +304,16 @@ class OrsClient:
             waypoint_order=order,
             raw=route,
         )
+
+
+_EARTH_RADIUS_KM = 6371.0088
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in km between two WGS84 points."""
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * _EARTH_RADIUS_KM * math.asin(math.sqrt(a))
