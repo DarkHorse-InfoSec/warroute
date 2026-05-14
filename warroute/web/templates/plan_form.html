@@ -7,22 +7,23 @@
   <div class="flash error">{{ error }}</div>
 {% endif %}
 
-<form class="stack" method="post" action="/plan">
+<form class="stack" method="post" action="/plan" id="plan-form">
   <div>
     <label for="duration_min">Time budget (min)</label>
     <input id="duration_min" name="duration_min" type="number" min="10" max="480" step="5"
            value="{{ defaults.duration_min }}" required />
     <span class="muted" style="font-size: 12px; display: block; margin-top: 0.25rem;">
       Loop: total drive time. Oneway: total including the direct drive
-      (any extra over the direct route becomes AP-scanning detour).
+      (any extra over the direct route becomes AP-scanning detour). Dwell minutes
+      at each stop are subtracted from the budget before routing.
     </span>
   </div>
 
   <div>
     <label for="mode">Mode</label>
     <select id="mode" name="mode">
-      <option value="loop" selected>loop (start = end)</option>
-      <option value="oneway">oneway (start &gt; destination)</option>
+      <option value="loop" selected>loop (start = end, stops optional)</option>
+      <option value="oneway">oneway (start &gt; final stop)</option>
     </select>
   </div>
 
@@ -53,31 +54,15 @@
     </div>
   </div>
 
-  <div class="geocode-field" data-field="destination">
-    <label for="destination_query">Destination <span class="muted">(oneway only)</span></label>
-
-    <input id="destination_query"
-           name="destination_query"
-           type="search"
-           placeholder='e.g. "Kohls South Burlington VT" or "Pick and Shovel Newport VT"'
-           hx-get="/plan/geocode"
-           hx-trigger="keyup changed delay:300ms, search"
-           hx-target="#destination-hits"
-           autocomplete="off"
-           inputmode="search" />
-
-    <div id="destination-hits" class="geocode-results"></div>
-
-    <input type="hidden" id="destination" name="destination" value="" />
-
-    <div id="destination-chosen" class="chosen-chip" hidden>
-      <span class="chip-pin" aria-hidden="true">PIN</span>
-      <span id="destination-chosen-label" class="chip-label"></span>
-      <button type="button"
-              class="chip-clear"
-              onclick="warrouteClearGeocode('destination')"
-              aria-label="Clear destination">change</button>
-    </div>
+  <div id="stops-section">
+    <label>Stops <span class="muted">(in order; last stop is the final destination for oneway)</span></label>
+    <div id="stops-list"></div>
+    <button type="button" id="add-stop-btn" class="btn secondary" onclick="warrouteAddStop()">
+      + Add stop
+    </button>
+    {% if oneway_required_stop_message %}
+      <div class="flash error" style="margin-top: 0.5rem;">{{ oneway_required_stop_message }}</div>
+    {% endif %}
   </div>
 
   <details>
@@ -97,10 +82,37 @@
   <button type="submit">Plan it</button>
 </form>
 
+<template id="stop-row-template">
+  <div class="stop-row geocode-field">
+    <div class="stop-row-header">
+      <span class="stop-number">Stop <span class="stop-index">__I__</span></span>
+      <button type="button" class="stop-remove" aria-label="Remove stop"
+              onclick="warrouteRemoveStop(this)">X</button>
+    </div>
+    <input class="stop-query"
+           type="search"
+           placeholder='e.g. "Daycare on Coventry St" or "44.96,-72.19"'
+           hx-get="/plan/geocode"
+           hx-trigger="keyup changed delay:300ms, search"
+           autocomplete="off"
+           inputmode="search" />
+    <div class="geocode-results stop-hits"></div>
+    <input class="stop-payload" type="hidden" name="stops" value="" />
+    <div class="stop-chosen chosen-chip" hidden>
+      <span class="chip-pin" aria-hidden="true">PIN</span>
+      <span class="stop-chosen-label chip-label"></span>
+      <button type="button" class="chip-clear"
+              onclick="warrouteClearStop(this)"
+              aria-label="Clear stop">change</button>
+    </div>
+    <label class="stop-dwell-label">Dwell (min)
+      <input class="stop-dwell" type="number" min="0" max="240" step="1" value="0" />
+    </label>
+  </div>
+</template>
+
 <script>
-// Generic helpers shared by all .geocode-field blocks (start, destination, ...).
-// Each block has data-field="<name>" on the wrapper; hidden input id=name; visible
-// input id=name+"_query"; chip parts use name+"-chosen"/-label/-hits ids.
+// Generic helpers shared by all .geocode-field blocks (start, ...).
 function warrouteSelectGeocode(btn) {
   var fieldEl = btn.closest('.geocode-field');
   if (!fieldEl) { return; }
@@ -108,6 +120,12 @@ function warrouteSelectGeocode(btn) {
   var lat = btn.dataset.lat;
   var lon = btn.dataset.lon;
   var label = btn.dataset.label || (lat + "," + lon);
+
+  // Stop rows have no data-field and use class-based selectors.
+  if (!name && fieldEl.classList.contains('stop-row')) {
+    warrouteStopSelectGeocode(fieldEl, lat, lon, label);
+    return;
+  }
   document.getElementById(name).value = lat + "," + lon;
   document.getElementById(name + "-chosen-label").textContent = label;
   document.getElementById(name + "-chosen").hidden = false;
@@ -123,10 +141,85 @@ function warrouteClearGeocode(name) {
   q.focus();
   document.getElementById(name + "-hits").innerHTML = "";
 }
+
+// Stop list management. Stops are 1-indexed in the UI; the form posts name="stops"
+// values formatted as "lat,lon[:dwell_min]" matching the CLI's --stop flag.
+function warrouteRenumberStops() {
+  var rows = document.querySelectorAll('#stops-list .stop-row');
+  rows.forEach(function (row, i) {
+    var idx = i + 1;
+    var label = row.querySelector('.stop-index');
+    if (label) { label.textContent = String(idx); }
+    var hitsId = "stop-hits-" + idx;
+    var resultsEl = row.querySelector('.stop-hits');
+    if (resultsEl) {
+      resultsEl.id = hitsId;
+    }
+    var queryEl = row.querySelector('.stop-query');
+    if (queryEl) {
+      queryEl.setAttribute('hx-target', '#' + hitsId);
+    }
+  });
+}
+function warrouteAddStop() {
+  var tpl = document.getElementById('stop-row-template');
+  var clone = tpl.content.firstElementChild.cloneNode(true);
+  document.getElementById('stops-list').appendChild(clone);
+  warrouteRenumberStops();
+  if (window.htmx) { htmx.process(clone); }
+  var input = clone.querySelector('.stop-query');
+  if (input) { input.focus(); }
+}
+function warrouteRemoveStop(btn) {
+  var row = btn.closest('.stop-row');
+  if (row && row.parentNode) { row.parentNode.removeChild(row); }
+  warrouteRenumberStops();
+}
+function warrouteStopSelectGeocode(row, lat, lon, label) {
+  row.querySelector('.stop-payload').value = lat + "," + lon;
+  row.querySelector('.stop-chosen-label').textContent = label;
+  row.querySelector('.stop-chosen').hidden = false;
+  row.querySelector('.stop-query').hidden = true;
+  var hits = row.querySelector('.stop-hits');
+  if (hits) { hits.innerHTML = ""; }
+}
+function warrouteClearStop(btn) {
+  var row = btn.closest('.stop-row');
+  if (!row) { return; }
+  row.querySelector('.stop-payload').value = "";
+  row.querySelector('.stop-chosen').hidden = true;
+  var q = row.querySelector('.stop-query');
+  q.hidden = false;
+  q.value = "";
+  q.focus();
+  var hits = row.querySelector('.stop-hits');
+  if (hits) { hits.innerHTML = ""; }
+}
+
+// Before submit: pack dwell minutes into the hidden "stops" payload as
+// "lat,lon" or "lat,lon:dwell_min". Empty rows (no lat/lon chosen) are dropped.
+document.getElementById('plan-form').addEventListener('submit', function () {
+  var rows = document.querySelectorAll('#stops-list .stop-row');
+  rows.forEach(function (row) {
+    var payloadEl = row.querySelector('.stop-payload');
+    var dwellEl = row.querySelector('.stop-dwell');
+    if (!payloadEl.value) {
+      // Strip the row's payload field so empty rows don't post.
+      payloadEl.removeAttribute('name');
+      return;
+    }
+    var dwell = parseInt(dwellEl.value, 10) || 0;
+    if (dwell > 0) {
+      payloadEl.value = payloadEl.value + ":" + dwell;
+    }
+  });
+});
 </script>
 
 <p style="color: var(--muted); font-size: 13px; margin-top: 1rem;">
-  Reachable radius is computed at 40 km/h (rural). For loops, half the time is the outbound budget;
-  for oneway, the full time. The planner picks up to 25 cells then back-fills if ORS overshoots.
+  Reachable radius is computed at 40 km/h (rural). Loop = drive a circuit (optionally
+  via stops); oneway = end at the last stop. Add multiple stops to chain destinations
+  (errands, daycare drop-off, road trip). The planner fits AP-scanning cells between
+  consecutive stops within each segment's time slice.
 </p>
 {% endblock %}

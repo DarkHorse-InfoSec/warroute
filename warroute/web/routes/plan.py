@@ -62,6 +62,7 @@ async def post_plan(
     home_lon: Annotated[float | None, Form()] = None,
     destination: Annotated[str | None, Form()] = None,
     destination_query: Annotated[str | None, Form()] = None,
+    stops: Annotated[list[str] | None, Form()] = None,
 ) -> HTMLResponse:
     settings = get_settings()
     if mode not in ("loop", "oneway"):
@@ -107,53 +108,79 @@ async def post_plan(
         start_lat = home_lat if home_lat is not None else settings.home_lat
         start_lon = home_lon if home_lon is not None else settings.home_lon
 
-    dest_lat: float | None = None
-    dest_lon: float | None = None
+    # Resolve STOPS. New canonical path: `stops` form list contains zero or more
+    # entries shaped "lat,lon" or "lat,lon:dwell_min". Legacy fallback: `destination`
+    # / `destination_query` populate a single stop when no `stops` were submitted.
+    stops_for_request: list[Stop] = []
+    if stops:
+        for raw in stops:
+            raw = (raw or "").strip()
+            if not raw:
+                continue
+            try:
+                latlon, _, dwell_s = raw.partition(":")
+                lat_s, lon_s = latlon.split(",", 1)
+                stops_for_request.append(
+                    Stop(
+                        lat=float(lat_s),
+                        lon=float(lon_s),
+                        dwell_min=int(dwell_s) if dwell_s else 0,
+                    )
+                )
+            except (ValueError, TypeError) as exc:
+                logger.warning("Ignoring malformed stop %r: %s", raw, exc)
+
+    # Legacy destination field: only honored when no stops[] were submitted.
     resolved_destination_label: str | None = None
-    if mode == "oneway":
-        # Path 1: hidden field populated by the type-ahead JS ("lat,lon").
+    if not stops_for_request and mode == "oneway":
+        legacy_lat: float | None = None
+        legacy_lon: float | None = None
         if destination and "," in destination:
             try:
                 lat_s, lon_s = destination.split(",", 1)
-                dest_lat = float(lat_s)
-                dest_lon = float(lon_s)
+                legacy_lat = float(lat_s)
+                legacy_lon = float(lon_s)
             except ValueError:
-                dest_lat = None
-                dest_lon = None
-        # Path 2: user typed but didn't tap a result (or hidden parse failed) —
-        # resolve the typed text via geocoder and use the first hit. Focus bias
-        # on the resolved start so "Pizza Hut" near origin ranks above globally.
-        if (dest_lat is None or dest_lon is None) and destination_query and destination_query.strip():
+                legacy_lat = None
+                legacy_lon = None
+        if (legacy_lat is None or legacy_lon is None) and destination_query and destination_query.strip():
             focus = Waypoint(lat=start_lat, lon=start_lon)
             try:
                 async with OrsClient() as ors:
                     hits = await ors.geocode(destination_query.strip(), focus=focus, size=1)
                 if hits:
-                    dest_lat = hits[0].lat
-                    dest_lon = hits[0].lon
+                    legacy_lat = hits[0].lat
+                    legacy_lon = hits[0].lon
                     resolved_destination_label = hits[0].label or hits[0].name
             except OrsError as exc:
-                logger.warning("destination geocode fallback failed for %r: %s", destination_query, exc)
-        if dest_lat is None or dest_lon is None:
-            return render(
-                request,
-                "plan_form.html",
-                defaults={
-                    "duration_min": duration_min,
-                    "home_lat": home_lat or settings.home_lat,
-                    "home_lon": home_lon or settings.home_lon,
-                },
-                error=(
-                    "oneway mode needs a destination - type a place name and tap a match,"
-                    " or paste 'lat,lon' coordinates"
-                ),
+                logger.warning(
+                    "destination geocode fallback failed for %r: %s", destination_query, exc
+                )
+        if legacy_lat is not None and legacy_lon is not None:
+            stops_for_request.append(
+                Stop(lat=legacy_lat, lon=legacy_lon, label=resolved_destination_label)
             )
 
-    stops_for_request: list[Stop] = []
-    if mode == "oneway" and dest_lat is not None and dest_lon is not None:
-        stops_for_request.append(
-            Stop(lat=dest_lat, lon=dest_lon, label=resolved_destination_label)
+    if mode == "oneway" and not stops_for_request:
+        return render(
+            request,
+            "plan_form.html",
+            defaults={
+                "duration_min": duration_min,
+                "home_lat": home_lat or settings.home_lat,
+                "home_lon": home_lon or settings.home_lon,
+            },
+            error=(
+                "oneway mode needs at least one stop - type an address and tap a match,"
+                " or paste 'lat,lon' coordinates"
+            ),
         )
+
+    # The final stop is the canonical "destination" for back-compat hooks (direct
+    # leg precheck, GMaps URL). Multi-stop plans have multiple intermediate stops
+    # before this one; single-stop / legacy plans just have this one.
+    dest_lat = stops_for_request[-1].lat if stops_for_request else None
+    dest_lon = stops_for_request[-1].lon if stops_for_request else None
 
     req = PlanRequest(
         home_lat=start_lat,

@@ -226,13 +226,16 @@ def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient
 
 
 def test_plan_form_has_start_search_box(client: TestClient) -> None:
-    """Starting location is now a type-ahead, mirroring destination."""
+    """Starting location is a geocoder type-ahead; stops are added via #stops-list."""
     resp = client.get("/plan")
     assert resp.status_code == 200
     assert 'name="start_query"' in resp.text
     assert 'id="start-hits"' in resp.text
     assert 'data-field="start"' in resp.text
-    assert 'data-field="destination"' in resp.text
+    # Phase 6a: destination geocode-field replaced by a stops list + add-stop btn.
+    assert 'id="stops-list"' in resp.text
+    assert 'id="add-stop-btn"' in resp.text
+    assert 'id="stop-row-template"' in resp.text
 
 
 def _mock_ors_loop_optimization() -> None:
@@ -549,12 +552,63 @@ def test_plan_invalid_mode(client: TestClient) -> None:
 
 
 def test_plan_form_has_geocode_search_box(client: TestClient) -> None:
-    """The lat/lon destination input was replaced with an HTMX type-ahead."""
+    """Geocoder type-ahead is still in the form (on start + on each stop row)."""
     resp = client.get("/plan")
     assert resp.status_code == 200
     assert 'hx-get="/plan/geocode"' in resp.text
-    assert 'name="destination_query"' in resp.text
-    assert 'id="destination-hits"' in resp.text
+    # Stops list is the new home for destination input (added via JS).
+    assert 'class="stop-query"' in resp.text  # in the <template>
+
+
+@respx.mock
+def test_plan_post_accepts_stops_form_list(client: TestClient) -> None:
+    """The form posts name='stops' as a list of 'lat,lon[:dwell]' strings.
+
+    Two stops -> multistop planner: 2 segments, each calls /optimization + the
+    full-chain /directions. All ORS calls use the same mocked response.
+    """
+    from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1200,
+                        "distance": 15000,
+                        "steps": [{"type": "job", "job": 0}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "summary": {"distance": 15000, "duration": 1200},
+                        "geometry": None,
+                    }
+                ]
+            },
+        )
+    )
+    resp = client.post(
+        "/plan",
+        data={
+            "duration_min": "90",
+            "mode": "oneway",
+            "start": "",
+            "start_query": "",
+            "stops": ["44.95,-72.20:5", "44.96,-72.19"],
+        },
+    )
+    assert resp.status_code == 200
+    assert "Plan #" in resp.text
 
 
 def test_geocode_short_query_returns_empty_body(client: TestClient) -> None:
