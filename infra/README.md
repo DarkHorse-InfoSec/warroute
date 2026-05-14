@@ -217,8 +217,86 @@ find /var/backups/ -name 'warroute-*.db' -mtime +30 -delete
 - **Caddy cert renewal:** automatic, no action needed. Watch `journalctl -u caddy --since '30 days ago' | grep -i renew` to confirm.
 - **fail2ban:** SSH brute-force bans are logged at `/var/log/fail2ban.log`. Whitelist your IP in `/etc/fail2ban/jail.local` if needed.
 - **Disk:** SQLite + GPX outputs + Caddy logs. Monitor with `df -h /var`; rotate logs aggressively if disk becomes a constraint.
-- **Updates:** `apt update && apt -y upgrade` weekly. `uv sync --all-extras` in the repo after `git pull` to refresh Python deps.
+- **Updates:** `apt update && apt -y upgrade` weekly. `uv sync --no-dev` in the repo after `git pull` to refresh Python deps.
 - **Secret rotation:** if any WIGLE/WDGOWARS/ORS token leaks, rotate at the provider, then update `/etc/warroute/warroute.env`, then `systemctl restart warroute`.
+
+---
+
+## 11. Deploying app updates (post-2026-05-14)
+
+The live install at `/home/warroute/warroute` is a git checkout cloned via an
+SSH **deploy key** added to the GitHub repo (read-only; key fingerprint
+registered in the repo settings under "Deploy keys" as `warroute-prod (5.161.250.8)`).
+This replaces the tarball+rsync deploy used through the v1 cutover.
+
+### One-time setup (already done on prod, here for replay on a new box)
+
+```bash
+# As warroute user, generate an ed25519 keypair scoped to this host:
+sudo -u warroute ssh-keygen -t ed25519 -f /home/warroute/.ssh/id_ed25519_github -N '' \
+  -C "warroute-deploy@$(hostname -I | awk '{print $1}')"
+
+# Pin the key for github.com (warroute user's ~/.ssh/config):
+sudo -u warroute tee /home/warroute/.ssh/config <<EOF
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile /home/warroute/.ssh/id_ed25519_github
+  IdentitiesOnly yes
+  StrictHostKeyChecking accept-new
+EOF
+sudo chown warroute:warroute /home/warroute/.ssh/config
+sudo chmod 600 /home/warroute/.ssh/config
+
+# On your laptop, paste the public key into the repo:
+gh repo deploy-key add /path/to/id_ed25519_github.pub \
+  --repo DarkHorse-InfoSec/warroute \
+  --title "warroute-prod (<IP>)"
+# (Leave "Allow write access" UNCHECKED - this key is read-only.)
+
+# Sanity check from the box:
+sudo -u warroute ssh -T git@github.com
+# -> "Hi DarkHorse-InfoSec/warroute! You've successfully authenticated..."
+```
+
+### Routine deploy (every PR merge)
+
+```bash
+ssh warroute  # via host alias in your ~/.ssh/config
+cd /home/warroute/warroute
+sudo -u warroute git pull --ff-only
+sudo -u warroute -H bash -lc 'cd /home/warroute/warroute && /usr/local/bin/uv sync --no-dev'
+systemctl restart warroute
+systemctl is-active warroute    # -> active
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8000/plan  # -> 200
+```
+
+Migrations run automatically when the app boots (the planner's first DB touch
+invokes `run_migrations`); no manual SQL needed for additive schema changes.
+
+### When `git pull --ff-only` refuses (local changes / divergence)
+
+The deploy is meant to be one-way (laptop -> prod). If `git pull --ff-only`
+refuses, something edited prod files out-of-band:
+
+1. `git status` to see what changed.
+2. Decide: commit upstream + redeploy, OR `git stash` the local change and pull.
+3. Never `git reset --hard` on prod without backing up first; the safe path is
+   to clone fresh into `warroute.new`, atomic-swap, and keep the old dir for
+   forensics. See the 2026-05-14 git-deploy switchover for the playbook.
+
+### Rollback
+
+```bash
+ssh warroute
+cd /home/warroute/warroute
+sudo -u warroute git log --oneline -5    # find last-known-good SHA
+sudo -u warroute git checkout <SHA>
+systemctl restart warroute
+```
+
+For a destructive rollback (schema migration backed something out), restore the
+DB from the most recent `.backup` per section 9.
 
 ---
 
