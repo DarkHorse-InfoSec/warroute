@@ -21,7 +21,7 @@ from warroute.clients.ors import (
     haversine_km,
 )
 from warroute.config import get_settings
-from warroute.router.gpx import google_maps_url, write_gpx
+from warroute.router.gpx import google_maps_url, write_gpx, write_gpx_per_day
 from warroute.router.planner import (
     PlannerError,
     PlanRequest,
@@ -36,6 +36,8 @@ router = APIRouter()
 
 # In-process cache so /plan/{id}/gpx can return the GPX without re-running ORS.
 _GPX_CACHE: dict[int, str] = {}
+# Phase 6c.2: per-day GPX cache for roadtrip plans. Key = (plan_id, day_number).
+_GPX_DAY_CACHE: dict[tuple[int, int], str] = {}
 
 
 @router.get("")
@@ -422,6 +424,11 @@ async def post_plan(
             description=f"{len(result.chosen_cells)} cells, ~{result.estimated_new_aps} new APs",
         )
         _GPX_CACHE[result.planned_route_id] = gpx_xml
+        # Phase 6c.2: cache per-day GPX too, so /plan/{id}/gpx/day/{N} can serve.
+        if result.days:
+            per_day = write_gpx_per_day(result.ordered_waypoints, result.days)
+            for day_num, body in per_day.items():
+                _GPX_DAY_CACHE[(result.planned_route_id, day_num)] = body
 
     return render(
         request,
@@ -481,4 +488,23 @@ async def get_plan_gpx(plan_id: int) -> PlainTextResponse:
         body,
         media_type="application/gpx+xml",
         headers={"Content-Disposition": f'attachment; filename="warroute-{plan_id}.gpx"'},
+    )
+
+
+@router.get("/{plan_id}/gpx/day/{day_number}", response_class=PlainTextResponse)
+async def get_plan_gpx_day(plan_id: int, day_number: int) -> PlainTextResponse:
+    """Phase 6c.2: per-day GPX for roadtrip plans. One file per overnight-separated day."""
+    body = _GPX_DAY_CACHE.get((plan_id, day_number))
+    if body is None:
+        return PlainTextResponse(
+            "day GPX not found or expired (in-memory cache)", status_code=404
+        )
+    return PlainTextResponse(
+        body,
+        media_type="application/gpx+xml",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="warroute-{plan_id}-day{day_number}.gpx"'
+            )
+        },
     )

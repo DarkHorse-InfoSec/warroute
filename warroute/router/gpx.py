@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import urllib.parse
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from warroute.clients.ors import Waypoint
+
+if TYPE_CHECKING:
+    from warroute.router.planner import DaySegment
 
 GPX_NS = "http://www.topografix.com/GPX/1/1"
 ET.register_namespace("", GPX_NS)
@@ -65,6 +69,37 @@ def write_gpx(
             )
 
     return ET.tostring(gpx, encoding="unicode", xml_declaration=True)
+
+
+def write_gpx_per_day(
+    ordered_waypoints: list[Waypoint],
+    days: list[DaySegment],
+    name_prefix: str = "WarRoute",
+) -> dict[int, str]:
+    """Phase 6c.2: render one GPX per DaySegment.
+
+    Returns {day_number: gpx_xml}. Phone navigation apps expect one GPX per trip,
+    so a 3-day roadtrip ships as three files instead of one combined polyline.
+    Empty input returns {}.
+    """
+    if not days:
+        return {}
+    per_day: dict[int, str] = {}
+    for day in days:
+        # end_idx is inclusive in DaySegment; slice up to end_idx + 1.
+        chunk = ordered_waypoints[day.start_idx : day.end_idx + 1]
+        if len(chunk) < 2:
+            continue
+        per_day[day.day_number] = write_gpx(
+            chunk,
+            track_points=None,
+            name=f"{name_prefix} Day {day.day_number}",
+            description=(
+                f"Day {day.day_number}: {day.drive_min:.0f} min drive"
+                f"{f' + {day.dwell_min} min dwell' if day.dwell_min else ''}"
+            ),
+        )
+    return per_day
 
 
 def google_maps_url(waypoints: list[Waypoint]) -> str:
