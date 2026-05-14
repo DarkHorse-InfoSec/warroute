@@ -49,6 +49,13 @@ class Settings(BaseSettings):
         default=False,
         description="(Future) Send a push when WDGoWars or ORS daily quota drops below 10%.",
     )
+    ntfy_departure_lead_min: int = Field(
+        default=5,
+        description=(
+            "Phase 6b.2: fire the 'time to leave' alarm this many minutes before"
+            " a planned departure. Set to 0 to fire exactly at the departure time."
+        ),
+    )
 
     # Web (for click-through URLs in notifications and external links)
     web_base_url: str = Field(
