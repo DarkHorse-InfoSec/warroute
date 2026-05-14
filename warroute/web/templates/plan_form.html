@@ -65,6 +65,15 @@
     {% endif %}
   </div>
 
+  <div>
+    <label for="arrive_by">Arrive by <span class="muted">(optional - planner computes departure)</span></label>
+    <input id="arrive_by" name="arrive_by" type="datetime-local" />
+    <span class="muted" style="font-size: 12px; display: block; margin-top: 0.25rem;">
+      Leave blank to plan by duration only. When set, the result page shows the
+      time you need to leave to make it on time, including stop dwells.
+    </span>
+  </div>
+
   <details>
     <summary class="advanced-summary">Advanced: raw lat/lon override for home</summary>
     <div class="advanced-grid">

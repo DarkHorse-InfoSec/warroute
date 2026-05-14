@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import httpx
 import pytest
 import respx
@@ -401,6 +403,120 @@ async def test_multistop_falls_back_to_direct_segment_when_no_cells_fit() -> Non
     # Got a route even with no cells fitting per-segment.
     assert "Stop A" in [w.label for w in result.ordered_waypoints]
     assert "Stop B" in [w.label for w in result.ordered_waypoints]
+
+
+@respx.mock
+async def test_plan_with_arrive_by_computes_departure() -> None:
+    """Phase 6b: when arrive_by is set, the planner subtracts trip time + buffer."""
+    run_migrations()
+    _seed_scored_grid(44.9367, -72.2051, radius_km=4)
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1800,  # 30 min drive
+                        "distance": 25000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 25000, "duration": 1800}, "geometry": None}]},
+        )
+    )
+
+    arrive = datetime(2026, 5, 14, 17, 0)  # 5pm
+    req = PlanRequest(
+        home_lat=44.9367,
+        home_lon=-72.2051,
+        duration_min=90,
+        mode="loop",
+        arrive_by=arrive,
+    )
+    result = await plan(req)
+    # Drive ~30 min, no dwell, +2 min buffer = departure 32 min before 5pm.
+    assert result.departure_at is not None
+    expected_min = result.estimated_drive_min + 2  # DEPARTURE_BUFFER_MIN
+    assert result.departure_at == arrive - timedelta(minutes=expected_min)
+
+    # Persisted to scheduled_departures.
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT plan_id, departure_at, arrive_by FROM scheduled_departures WHERE plan_id = ?",
+            (result.planned_route_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["plan_id"] == result.planned_route_id
+
+
+@respx.mock
+async def test_plan_without_arrive_by_skips_departure() -> None:
+    """No arrive_by -> departure_at stays None, no scheduled_departures row."""
+    run_migrations()
+    _seed_scored_grid(44.9367, -72.2051, radius_km=4)
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1500,
+                        "distance": 20000,
+                        "steps": [{"type": "job", "job": 0}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 1500}, "geometry": None}]},
+        )
+    )
+
+    req = PlanRequest(home_lat=44.9367, home_lon=-72.2051, duration_min=60, mode="loop")
+    result = await plan(req)
+    assert result.departure_at is None
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM scheduled_departures WHERE plan_id = ?",
+            (result.planned_route_id,),
+        ).fetchone()
+    assert row["n"] == 0
+
+
+def test_total_trip_min_includes_dwell() -> None:
+    """Phase 6b helper: total trip = drive + dwell. Validated without ORS."""
+    from warroute.clients.ors import RouteLeg
+    from warroute.router.planner import PlanResult
+
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="oneway",
+        stops=[
+            Stop(lat=44.95, lon=-72.20, dwell_min=10),
+            Stop(lat=44.96, lon=-72.19, dwell_min=5),
+        ],
+    )
+    leg = RouteLeg(distance_m=10000, duration_s=1800, geometry=None, waypoint_order=[], raw={})
+    result = PlanResult(
+        request=req, chosen_cells=[], ordered_waypoints=[], leg=leg, estimated_new_aps=0
+    )
+    # 30 min drive + 15 min dwell = 45 min total trip
+    assert result.total_trip_min == pytest.approx(45.0)
 
 
 def test_is_multistop_true_for_loop_with_any_stops() -> None:

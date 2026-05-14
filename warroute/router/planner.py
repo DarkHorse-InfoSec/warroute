@@ -12,8 +12,8 @@ Algorithm (PLAN.md §3.3, adapted for ORS):
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 
 from warroute.clients.ors import (
     MAX_OPTIMIZATION_JOBS,
@@ -39,6 +39,9 @@ EARTH_KM_PER_DEG_LAT = 111.32
 # refuse to silently insert 50k+ rows for a runaway 8-hour request - those
 # should run `coverage refresh` deliberately instead.
 MAX_AUTO_PAINT_CELLS = 2000
+# Phase 6b: small safety buffer added to the computed departure time so the user
+# isn't expected to leave the door at the literal second the route says.
+DEPARTURE_BUFFER_MIN = 2
 
 
 class PlannerError(RuntimeError):
@@ -82,6 +85,7 @@ class PlanRequest:
     stops: list[Stop] = field(default_factory=list)
     avg_speed_kmh: float = DEFAULT_AVG_SPEED_KMH
     direct_min: float | None = None  # T_direct in min (oneway only); enables corridor filter
+    arrive_by: datetime | None = None  # Phase 6b: when set, planner computes departure
 
     @property
     def destination_lat(self) -> float | None:
@@ -156,10 +160,16 @@ class PlanResult:
     drops_for_slack: list[str] = field(default_factory=list)
     synthetic_density: bool = False  # True when every chosen cell is unprobed
     auto_painted_cells: int = 0  # rows added by the empty-DB grid paint, if any
+    departure_at: datetime | None = None  # Phase 6b: derived from arrive_by - duration
 
     @property
     def estimated_drive_min(self) -> float:
         return self.leg.duration_min
+
+    @property
+    def total_trip_min(self) -> float:
+        """Drive time + total dwell at user-specified stops."""
+        return self.estimated_drive_min + self.request.total_dwell_min()
 
 
 async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult:
@@ -231,18 +241,52 @@ async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult
 
     plan_id = _persist_plan(request, ordered_waypoints, leg, estimated_new_aps)
 
-    return PlanResult(
-        request=request,
-        chosen_cells=chosen,
-        ordered_waypoints=ordered_waypoints,
-        leg=leg,
-        geometry=geometry,
-        estimated_new_aps=estimated_new_aps,
-        planned_route_id=plan_id,
-        drops_for_slack=drops,
-        synthetic_density=synthetic,
-        auto_painted_cells=auto_painted,
+    return _attach_departure_time(
+        PlanResult(
+            request=request,
+            chosen_cells=chosen,
+            ordered_waypoints=ordered_waypoints,
+            leg=leg,
+            geometry=geometry,
+            estimated_new_aps=estimated_new_aps,
+            planned_route_id=plan_id,
+            drops_for_slack=drops,
+            synthetic_density=synthetic,
+            auto_painted_cells=auto_painted,
+        )
     )
+
+
+def _attach_departure_time(result: PlanResult) -> PlanResult:
+    """Phase 6b: compute departure time when the request has arrive_by set.
+
+    Persists a row to scheduled_departures so a future ntfy job can fire an
+    alarm at (departure - 5 min). Returns the result with departure_at populated.
+
+    No-op when arrive_by is None or the plan wasn't persisted (planned_route_id
+    is None).
+    """
+    if result.request.arrive_by is None or result.planned_route_id is None:
+        return result
+    total_min = result.total_trip_min + DEPARTURE_BUFFER_MIN
+    departure = result.request.arrive_by - timedelta(minutes=total_min)
+    with transaction() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO scheduled_departures (plan_id, departure_at, arrive_by)
+            VALUES (?, ?, ?)
+            """,
+            (
+                result.planned_route_id,
+                departure.replace(tzinfo=None).isoformat()
+                if departure.tzinfo
+                else departure.isoformat(),
+                result.request.arrive_by.replace(tzinfo=None).isoformat()
+                if result.request.arrive_by.tzinfo
+                else result.request.arrive_by.isoformat(),
+            ),
+        )
+    return replace(result, departure_at=departure)
 
 
 def _paint_grid_for_request(request: PlanRequest) -> int:
@@ -502,17 +546,19 @@ async def _plan_multistop(
 
     plan_id = _persist_plan(request, all_waypoints, aggregate_leg, estimated_new_aps)
 
-    return PlanResult(
-        request=request,
-        chosen_cells=all_chosen,
-        ordered_waypoints=all_waypoints,
-        leg=aggregate_leg,
-        geometry=geometry,
-        estimated_new_aps=estimated_new_aps,
-        planned_route_id=plan_id,
-        drops_for_slack=all_drops,
-        synthetic_density=synthetic,
-        auto_painted_cells=auto_painted_total,
+    return _attach_departure_time(
+        PlanResult(
+            request=request,
+            chosen_cells=all_chosen,
+            ordered_waypoints=all_waypoints,
+            leg=aggregate_leg,
+            geometry=geometry,
+            estimated_new_aps=estimated_new_aps,
+            planned_route_id=plan_id,
+            drops_for_slack=all_drops,
+            synthetic_density=synthetic,
+            auto_painted_cells=auto_painted_total,
+        )
     )
 
 

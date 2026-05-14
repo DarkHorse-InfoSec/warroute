@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from datetime import datetime
 from math import ceil
 from typing import Annotated
 
@@ -63,6 +64,7 @@ async def post_plan(
     destination: Annotated[str | None, Form()] = None,
     destination_query: Annotated[str | None, Form()] = None,
     stops: Annotated[list[str] | None, Form()] = None,
+    arrive_by: Annotated[str | None, Form()] = None,
 ) -> HTMLResponse:
     settings = get_settings()
     if mode not in ("loop", "oneway"):
@@ -182,6 +184,14 @@ async def post_plan(
     dest_lat = stops_for_request[-1].lat if stops_for_request else None
     dest_lon = stops_for_request[-1].lon if stops_for_request else None
 
+    parsed_arrive_by: datetime | None = None
+    if arrive_by and arrive_by.strip():
+        try:
+            # HTML datetime-local inputs produce 'YYYY-MM-DDTHH:MM' (no tz).
+            parsed_arrive_by = datetime.fromisoformat(arrive_by.strip())
+        except ValueError:
+            logger.warning("Ignoring malformed arrive_by=%r", arrive_by)
+
     req = PlanRequest(
         home_lat=start_lat,
         home_lon=start_lon,
@@ -189,6 +199,7 @@ async def post_plan(
         mode=mode,
         stops=stops_for_request,
         direct_min=None,  # populated below after the direct-route precheck
+        arrive_by=parsed_arrive_by,
     )
 
     # Sanity check: if the geocoder returned a destination way outside the budget's
