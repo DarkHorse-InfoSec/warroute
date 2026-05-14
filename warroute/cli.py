@@ -245,6 +245,17 @@ def plan(
     )
     out_path.write_text(gpx_xml, encoding="utf-8")
 
+    # Phase 6c.2: per-day GPX for roadtrip plans (one GPX per overnight-separated day).
+    per_day_paths: list[Path] = []
+    if result.days:
+        from warroute.router.gpx import write_gpx_per_day
+
+        per_day = write_gpx_per_day(result.ordered_waypoints, result.days)
+        for day_num, gpx in per_day.items():
+            day_path = out_path.with_name(f"{out_path.stem}-day{day_num}{out_path.suffix}")
+            day_path.write_text(gpx, encoding="utf-8")
+            per_day_paths.append(day_path)
+
     console.print(
         f"[green]Plan {result.planned_route_id}[/green]: "
         f"{len(result.chosen_cells)} cells, "
@@ -255,6 +266,8 @@ def plan(
     if result.drops_for_slack:
         console.print(f"  Dropped to fit budget: {len(result.drops_for_slack)} cells")
     console.print(f"  GPX: {out_path}")
+    for p in per_day_paths:
+        console.print(f"  Day GPX: {p}")
     console.print(f"  Maps: {google_maps_url(result.ordered_waypoints)}")
 
 

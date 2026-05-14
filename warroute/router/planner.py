@@ -136,8 +136,15 @@ class PlanRequest:
         adds ~2 * d_to_corridor of out-and-back. So d_max ≈ S * speed / (60 * 8). The 8 in
         the denominator is a back-off-friendly upper bound (real picks rarely visit 4 cells
         at the max distance; the planner backs off greedy until the route fits).
+
+        Phase 6c.2: highway-class segments (direct_min > 30) get a 2x multiplier.
+        On an interstate you cross several cells just driving the speed limit, so a
+        cell 5 km off-road is fine; the in-town formula was too tight for those.
         """
-        return self.detour_budget_min() * self.avg_speed_kmh / 60.0 / 8.0
+        base = self.detour_budget_min() * self.avg_speed_kmh / 60.0 / 8.0
+        if self.direct_min is not None and self.direct_min > 30:
+            return base * 2.0
+        return base
 
     def end_waypoint(self) -> Waypoint:
         if self.mode == "loop":
@@ -505,12 +512,19 @@ async def _plan_multistop(
 
     async with OrsClient() as ors:
         for i, (seg_start, seg_end) in enumerate(segments):
+            # Phase 6c.2: estimate this segment's direct drive time via haversine so
+            # the per-segment corridor filter kicks in. Cheap (no extra ORS call) and
+            # accurate enough for the corridor heuristic - the back-off corrects any
+            # over-budget pick anyway.
+            seg_km = _km_between(seg_start.lat, seg_start.lon, seg_end.lat, seg_end.lon)
+            seg_direct_min = (seg_km / DEFAULT_AVG_SPEED_KMH) * 60.0
             sub_req = PlanRequest(
                 home_lat=seg_start.lat,
                 home_lon=seg_start.lon,
                 duration_min=per_seg_min,
                 mode="oneway",
                 stops=[Stop(lat=seg_end.lat, lon=seg_end.lon, label=seg_end.label)],
+                direct_min=seg_direct_min,
             )
             seg_cands = _candidate_cells(sub_req)
             if not seg_cands:

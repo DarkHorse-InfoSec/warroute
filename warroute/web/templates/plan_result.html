@@ -130,6 +130,18 @@
   <a class="btn secondary" href="/plan">Plan another</a>
 </p>
 
+{% if result.days %}
+<p style="margin-top: 0.5rem;">
+  <span class="muted" style="font-size: 13px; margin-right: 0.5rem;">Per-day GPX:</span>
+  {% for day in result.days %}
+    <a class="btn secondary" style="margin-right: 0.25rem;"
+       href="/plan/{{ result.planned_route_id }}/gpx/day/{{ day.day_number }}">
+      Day {{ day.day_number }}
+    </a>
+  {% endfor %}
+</p>
+{% endif %}
+
 {% if result.chosen_cells %}
 <h2>Picked cells</h2>
 <table>
