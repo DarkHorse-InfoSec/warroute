@@ -228,6 +228,7 @@ async def post_plan(
 
     direct_fallback_notice: str | None = None
     loop_bumped_notice: str | None = None
+    synthetic_density_notice: str | None = None
     try:
         result = await run_plan(req)
     except PlannerError as exc:
@@ -337,6 +338,20 @@ async def post_plan(
             error=f"Routing service error: {exc}",
         )
 
+    if result.synthetic_density:
+        if result.auto_painted_cells > 0:
+            synthetic_density_notice = (
+                f"No coverage data for this area yet - painted a {result.auto_painted_cells}-cell"
+                f" grid and routed a geometrically spread loop through it. Wardrive this route"
+                f" and your next plan will be density-optimized."
+            )
+        else:
+            synthetic_density_notice = (
+                "All routed cells are unprobed (we haven't queried WiGLE for this area)."
+                " The route is geometrically spread; wardrive + upload to populate density"
+                " data for the next plan."
+            )
+
     waypoints_geojson = {
         "type": "FeatureCollection",
         "features": [
@@ -373,6 +388,7 @@ async def post_plan(
         direct_min=direct_min,
         direct_fallback_notice=direct_fallback_notice,
         loop_bumped_notice=loop_bumped_notice,
+        synthetic_density_notice=synthetic_density_notice,
     )
 
 

@@ -5,6 +5,29 @@ Append-only. Newest at top.
 
 ---
 
+## 2026-05-14 (PM) - Planner auto-paints grid + unit-density proxy when DB empty
+
+**Question:** v1's `/plan` raises `PlannerError("No scored cells in reachable radius. Run `warroute coverage refresh` first.")` when the `cells` table has no rows in the request's reachable radius. The auto-bump fallback (added in `b41d482`) only bumps the *time budget*, not the candidate set — empty DB → bumped retry → same empty DB → hard fail. Hit live on prod (5.161.250.8) where the DB was migrated but `coverage refresh` has never been run.
+
+Deeper issue: `coverage refresh` queries WiGLE per cell at ~1 req/s and per-memory stalls 60+ seconds on rural Vermont cells with sparse APs. So "just tell the user to run refresh" is not a real fix — it's slow and unreliable in the exact terrain WarRoute targets.
+
+**Resolution:** Two coordinated changes:
+1. **Auto-paint grid on demand.** When `_candidate_cells` returns empty, call `cells_in_radius(home, reachable_radius)` and `upsert_grid` the result. No WiGLE/WDGoWars calls — just inserts the geometry rows (id, center, bbox) with `estimated_total_aps=NULL`. Capped at `MAX_AUTO_PAINT_CELLS=2000` so an 8-hour-loop request doesn't silently write 50k+ rows (those should run `coverage refresh` deliberately).
+2. **Two-tier scorer ranking.** Scorer treats `estimated_total_aps IS NULL` cells as unprobed with `UNPROBED_DENSITY_PROXY=1`. `rank_cells` sorts probed cells first (descending score) then unprobed cells (descending capture_value as tiebreaker). Probed cells always outrank unprobed regardless of nominal score — so once you've actually wardriven somewhere, that density data drives the next plan.
+
+`PlanResult` gets two new flags: `synthetic_density: bool` (True when every chosen cell is unprobed) and `auto_painted_cells: int`. The web layer surfaces the synthetic notice on the result page: "No coverage data for this area yet — wardrive this loop and your next plan will be density-optimized."
+
+**Why this and not the alternatives:**
+- **Synthetic-waypoints (no DB writes):** considered. Generate N evenly-spaced waypoints in a circle around home, no cells touched. Smaller change. Rejected because painted cells become the seed for a future `coverage refresh` — the on-demand paint is doing useful permanent work, not just a one-off hack.
+- **Auto-trigger WiGLE refresh in background:** considered. Kick off `coverage refresh` async on first plan, return synthetic now, populate density next plan. Rejected for v1 due to complexity (background job, status check, partial-completion handling). Worth revisiting when we have a job queue for Phase 6 arrival-time scheduled departures.
+- **Default density=0 for None cells:** rejected. Would make all unprobed cells score 0, tied with cells where WiGLE actually said "zero APs here." Loses the signal: a probed-zero cell is genuinely empty; an unprobed cell is unknown.
+
+**Conceptual clarification (worth restating):** "Scored" in WarRoute means "we have asked WiGLE about this cell," not "someone has wardriven it." WiGLE's underlying database covers most cells with at least a few public-registry APs. Empty-DB-locally just means we never queried WiGLE for that area. Most useful in remote regions where the user is the primary wardriver — those are the highest-yield targets, not exclusion zones.
+
+**What this enables next:** Phase 6 (multi-leg planner) builds on top — multi-stop routes can use auto-paint for any segment whose corridor hasn't been refreshed. Roadtrip mode especially benefits, since long-distance corridors will almost always have un-queried cells along them.
+
+---
+
 ## 2026-05-14 - Tester access via multi-user Caddy basic_auth (no app changes)
 
 **Question:** WarRoute is deployed at `https://warroute.darkhorseinfosec.com` behind Caddy basic_auth with a single user (`domenic`). To validate the app before public release, we need to give a small number of testers their own credentials. PLAN.md §9 explicitly forbids login forms, JWTs, and session management ("Single-tenant. No login, no JWT, no session management. HTTP basic auth at the Caddy layer. Don't add a user model."). Does adding testers violate that constraint?

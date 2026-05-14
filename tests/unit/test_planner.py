@@ -97,10 +97,57 @@ def test_plan_request_oneway_requires_destination() -> None:
 
 
 @respx.mock
-async def test_plan_raises_when_no_candidates() -> None:
+async def test_plan_auto_paints_grid_when_db_empty() -> None:
+    """Empty DB + plan request -> paint grid for reachable radius, return spread plan.
+
+    The user is in a virgin area we've never run `coverage refresh` against. Instead
+    of failing, paint the grid (no WiGLE calls) and route through it with unprobed
+    cells. They wardrive, upload, density populates for next time.
+    """
     run_migrations()
-    req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=90, mode="loop")
-    with pytest.raises(PlannerError, match="No scored cells"):
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1500,
+                        "distance": 20000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 1500}, "geometry": None}]},
+        )
+    )
+
+    req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=30, mode="loop")
+    result = await plan(req)
+
+    assert result.auto_painted_cells > 0  # grid was painted on-demand
+    assert result.synthetic_density is True  # every chosen cell is unprobed
+    assert result.planned_route_id is not None
+    assert all(not c.probed for c in result.chosen_cells)
+
+
+@respx.mock
+async def test_plan_radius_too_huge_to_auto_paint() -> None:
+    """Runaway radius (e.g. 8-hour loop) should refuse to auto-paint silently.
+
+    Capped at MAX_AUTO_PAINT_CELLS so we don't insert 50k+ rows on a single plan
+    request. The user should run `warroute coverage refresh` deliberately for an
+    area that size.
+    """
+    run_migrations()
+    # 8-hour loop in rural terrain at 40km/h = 160km radius = ~22k cells, well over cap.
+    req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=480, mode="loop")
+    with pytest.raises(PlannerError, match="Could not generate any candidate"):
         await plan(req)
 
 
@@ -246,12 +293,39 @@ async def test_plan_raises_when_back_off_exhausts_candidates() -> None:
 
 @respx.mock
 async def test_plan_skips_my_owned_cells() -> None:
+    """Cells the player already owns are excluded from candidates.
+
+    With the auto-paint fallback, an all-mine seed no longer raises (the planner
+    paints additional unprobed cells outside the seed area). What we verify is
+    that no me-owned cell ends up in chosen_cells.
+    """
     run_migrations()
     ids = _seed_scored_grid(44.9367, -72.2051, radius_km=4)
-    # Mark all cells as owned by me - should leave zero candidates.
     with transaction() as conn:
         cells_dal.mark_owned_by_me(conn, ids)
 
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1500,
+                        "distance": 20000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 1500}, "geometry": None}]},
+        )
+    )
+
     req = PlanRequest(home_lat=44.9367, home_lon=-72.2051, duration_min=90, mode="loop")
-    with pytest.raises(PlannerError, match="No scored cells"):
-        await plan(req)
+    result = await plan(req)
+    assert not any(c.ownership == "me" for c in result.chosen_cells)

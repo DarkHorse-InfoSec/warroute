@@ -23,6 +23,7 @@ from warroute.clients.ors import (
     Waypoint,
 )
 from warroute.coverage import cells as cells_dal
+from warroute.coverage.grid import cells_in_radius
 from warroute.db import transaction
 from warroute.router.scorer import CellScore, rank_cells
 
@@ -33,6 +34,11 @@ DEFAULT_AVG_SPEED_KMH = 40.0
 DURATION_SLACK = 0.10  # accept routes up to 10% over the requested budget
 MIN_WAYPOINTS = 2  # if we can't fit at least 2 cells, plan is useless
 EARTH_KM_PER_DEG_LAT = 111.32
+# Hard cap on how many cells we'll auto-paint per plan when the DB is empty.
+# Sized to comfortably cover a ~120-min loop in rural terrain (~840 cells) but
+# refuse to silently insert 50k+ rows for a runaway 8-hour request - those
+# should run `coverage refresh` deliberately instead.
+MAX_AUTO_PAINT_CELLS = 2000
 
 
 class PlannerError(RuntimeError):
@@ -100,6 +106,8 @@ class PlanResult:
     estimated_new_aps: int = 0
     planned_route_id: int | None = None
     drops_for_slack: list[str] = field(default_factory=list)
+    synthetic_density: bool = False  # True when every chosen cell is unprobed
+    auto_painted_cells: int = 0  # rows added by the empty-DB grid paint, if any
 
     @property
     def estimated_drive_min(self) -> float:
@@ -109,10 +117,20 @@ class PlanResult:
 async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult:
     """End-to-end plan. Reads cells from DB, calls ORS, persists planned_routes row."""
     candidates = _candidate_cells(request)
+    auto_painted = 0
     if not candidates:
-        raise PlannerError(
-            "No scored cells in reachable radius. Run `warroute coverage refresh` first."
-        )
+        # No cells in the DB for this area yet (typical for a brand-new install or
+        # an area `coverage refresh` has never touched). Paint the grid for the
+        # reachable radius - rows only, no WiGLE calls - and re-rank. Unprobed cells
+        # get a unit density proxy via the scorer, so we produce a geometrically
+        # spread plan the user can wardrive to seed real density data.
+        auto_painted = _paint_grid_for_request(request)
+        candidates = _candidate_cells(request)
+        if not candidates:
+            raise PlannerError(
+                "Could not generate any candidate cells around the start point."
+                " Check HOME_LAT/HOME_LON or the reachable radius."
+            )
 
     home = Waypoint(request.home_lat, request.home_lon, label="Home")
     end = request.end_waypoint()
@@ -155,6 +173,7 @@ async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult
     )
 
     estimated_new_aps = sum(c.estimated_aps for c in chosen if c.ownership != "me")
+    synthetic = bool(chosen) and all(not c.probed for c in chosen)
 
     plan_id = _persist_plan(request, ordered_waypoints, leg, estimated_new_aps)
 
@@ -167,7 +186,44 @@ async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult
         estimated_new_aps=estimated_new_aps,
         planned_route_id=plan_id,
         drops_for_slack=drops,
+        synthetic_density=synthetic,
+        auto_painted_cells=auto_painted,
     )
+
+
+def _paint_grid_for_request(request: PlanRequest) -> int:
+    """Insert grid cells covering the request's reachable radius around the start.
+
+    Used as the on-demand bootstrap when the DB has no cells in this area yet.
+    Inserts rows only (id, center, bbox) - density and ownership stay NULL so the
+    scorer marks them `probed=False`. Capped at MAX_AUTO_PAINT_CELLS; if the
+    request's radius would generate more, we paint nothing and let the caller
+    raise (the user should run `warroute coverage refresh` deliberately for that
+    size of area).
+
+    Returns the number of rows inserted (0 if nothing new).
+    """
+    radius_km = request.reachable_radius_km()
+    grid = cells_in_radius(request.home_lat, request.home_lon, radius_km)
+    if len(grid) > MAX_AUTO_PAINT_CELLS:
+        logger.warning(
+            "Grid auto-paint refused: %d cells for radius %.1f km exceeds cap %d",
+            len(grid),
+            radius_km,
+            MAX_AUTO_PAINT_CELLS,
+        )
+        return 0
+    with transaction() as conn:
+        inserted = cells_dal.upsert_grid(conn, grid)
+    if inserted:
+        logger.info(
+            "Auto-painted %d cells (radius %.1f km) into empty area around (%.4f, %.4f)",
+            inserted,
+            radius_km,
+            request.home_lat,
+            request.home_lon,
+        )
+    return inserted
 
 
 def _candidate_cells(request: PlanRequest) -> list[CellScore]:
