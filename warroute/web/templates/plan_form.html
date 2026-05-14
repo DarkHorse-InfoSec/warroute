@@ -117,6 +117,10 @@
     <label class="stop-dwell-label">Dwell (min)
       <input class="stop-dwell" type="number" min="0" max="240" step="1" value="0" />
     </label>
+    <label class="stop-overnight-label" title="Roadtrip: end this day's drive here">
+      <input class="stop-overnight" type="checkbox" />
+      <span>Overnight after</span>
+    </label>
   </div>
 </template>
 
@@ -205,21 +209,27 @@ function warrouteClearStop(btn) {
   if (hits) { hits.innerHTML = ""; }
 }
 
-// Before submit: pack dwell minutes into the hidden "stops" payload as
-// "lat,lon" or "lat,lon:dwell_min". Empty rows (no lat/lon chosen) are dropped.
+// Before submit: pack dwell minutes + overnight flag into the hidden "stops"
+// payload as "lat,lon[:dwell_min[:overnight]]" matching the CLI --stop format.
+// Empty rows (no lat/lon chosen) are dropped.
 document.getElementById('plan-form').addEventListener('submit', function () {
   var rows = document.querySelectorAll('#stops-list .stop-row');
   rows.forEach(function (row) {
     var payloadEl = row.querySelector('.stop-payload');
     var dwellEl = row.querySelector('.stop-dwell');
+    var overnightEl = row.querySelector('.stop-overnight');
     if (!payloadEl.value) {
       // Strip the row's payload field so empty rows don't post.
       payloadEl.removeAttribute('name');
       return;
     }
     var dwell = parseInt(dwellEl.value, 10) || 0;
-    if (dwell > 0) {
+    var overnight = overnightEl && overnightEl.checked;
+    if (dwell > 0 || overnight) {
       payloadEl.value = payloadEl.value + ":" + dwell;
+      if (overnight) {
+        payloadEl.value = payloadEl.value + ":overnight";
+      }
     }
   });
 });

@@ -120,13 +120,17 @@ async def post_plan(
             if not raw:
                 continue
             try:
-                latlon, _, dwell_s = raw.partition(":")
-                lat_s, lon_s = latlon.split(",", 1)
+                # Format: "lat,lon" | "lat,lon:dwell" | "lat,lon:dwell:overnight"
+                parts = raw.split(":")
+                lat_s, lon_s = parts[0].split(",", 1)
+                dwell = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+                overnight = len(parts) > 2 and parts[2].lower() == "overnight"
                 stops_for_request.append(
                     Stop(
                         lat=float(lat_s),
                         lon=float(lon_s),
-                        dwell_min=int(dwell_s) if dwell_s else 0,
+                        dwell_min=dwell,
+                        overnight_after=overnight,
                     )
                 )
             except (ValueError, TypeError) as exc:
