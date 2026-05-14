@@ -94,7 +94,19 @@ class PlanRequest:
 
     @property
     def is_multistop(self) -> bool:
-        """True if this is a multi-leg request (>1 stop)."""
+        """True if this request needs per-segment routing.
+
+        Per-segment routing kicks in for:
+          - loop mode + 1 or more stops (home -> stops... -> home is 2+ segments)
+          - oneway mode + 2 or more stops (home -> stops... -> last is 2+ segments)
+
+        Single-stop oneway (home -> destination) is a single segment - the
+        existing `plan()` path handles it.
+        """
+        if not self.stops:
+            return False
+        if self.mode == "loop":
+            return True
         return len(self.stops) > 1
 
     def total_dwell_min(self) -> int:

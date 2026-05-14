@@ -403,6 +403,36 @@ async def test_multistop_falls_back_to_direct_segment_when_no_cells_fit() -> Non
     assert "Stop B" in [w.label for w in result.ordered_waypoints]
 
 
+def test_is_multistop_true_for_loop_with_any_stops() -> None:
+    """Loop mode with any stop needs per-segment routing (home -> stop -> home)."""
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="loop",
+        stops=[Stop(lat=44.95, lon=-72.20)],
+    )
+    assert req.is_multistop is True
+
+
+def test_is_multistop_false_for_oneway_with_single_stop() -> None:
+    """Oneway + 1 stop is the classic single-segment case (home -> destination)."""
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="oneway",
+        stops=[Stop(lat=44.95, lon=-72.20)],
+    )
+    assert req.is_multistop is False
+
+
+def test_is_multistop_false_for_pure_loop() -> None:
+    """Loop + no stops is a pure single-segment loop around home."""
+    req = PlanRequest(home_lat=44.94, home_lon=-72.21, duration_min=60, mode="loop")
+    assert req.is_multistop is False
+
+
 def test_plan_request_total_dwell_min_sums_stops() -> None:
     req = PlanRequest(
         home_lat=44.94,
