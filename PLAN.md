@@ -227,6 +227,62 @@ The fastest-to-value piece. Build this first because it's useful even without an
 
 Defer this to v1.1. Don't let it block Phase 4 acceptance.
 
+### Phase 6 (post-v1) — Multi-leg planner
+
+**Motivation:** v1 plans either a loop (home → home) or a one-way (home → destination). Real driving has shape: drop kid at daycare → go to work → come home. Road trips chain cities with overnight stops. Errands stack. The single-destination model can't express any of this. Phase 6 generalizes the planner to N waypoints with optional dwell times, optional arrival deadlines, and multi-day segmenting.
+
+The three asks layer; do them in order, each shippable on its own:
+
+**6a. Multi-stop core** (foundation for 6b and 6c)
+
+Replace single `destination` with an ordered list of stops. Wardriving cells slot between consecutive stops via the existing corridor filter, run per segment.
+
+- Schema: add `stops_json` column to `planned_routes` (JSON array of `{lat, lon, label, dwell_min}`). Keep existing `destination_lat`/`lon` populated to the *last* stop for backward compat with existing rows.
+- `PlanRequest`: replace `destination_lat/lon` with `stops: list[Stop]`. Loop mode = no stops; oneway = one stop (today's behavior); multi-stop = 2+ stops.
+- Planner: for each consecutive (stop[i], stop[i+1]) pair, run the corridor filter independently and pick cells. ORS optimization call per segment, capped by ORS's 25-jobs-per-call limit. Total ORS calls = N segments × {1 directions + 1 optimization} per segment.
+- UI (`/plan`):
+  - Stops list with drag-reorder (Sortable.js or HTMX swap). "+ Add stop" appends a stop with geocoder type-ahead. "X" removes.
+  - Per-stop: address (type-ahead), optional dwell-minutes input ("How long are you stopped?").
+  - Result page: stop list with cumulative drive + dwell time, GMaps URL that chains all stops + cells.
+- Constraints: max 8 stops (ORS optimization VRP cap is 25 jobs; reserve room for cells per segment). Beyond 8, route to /roadtrip (see 6c).
+
+**6b. Arrival-time backward planning**
+
+User specifies "be at the last stop by HH:MM" instead of (or in addition to) duration. Planner computes departure time, alerts user if budget too tight.
+
+- `PlanRequest` adds `arrive_by: datetime | None`.
+- Logic: planner computes total drive_min + sum(dwell_min). `departure = arrive_by - total_min`. If `departure < now() + 5min`, return error: "Not enough time — leave immediately or sooner, OR drop a stop."
+- UI: new mode toggle "Plan by duration" vs "Plan by arrival time". When "arrival time" selected, replace the duration input with a datetime picker.
+- Optional: ntfy push at `departure - 5min`: "Leave in 5 min for [first stop]". Wire via existing Phase 5 ntfy infra. New table `scheduled_departures(plan_id, departure_at, notified_at)`; new systemd timer job polls it every minute.
+
+**6c. Roadtrip mode**
+
+Long-distance, multi-day, multi-state plans. Same multi-stop primitive, with overnight markers and per-day segmenting.
+
+- Add `overnight_after: bool` to each stop. When set, planner ends a day at that stop and starts the next day from it.
+- Per-segment density routing: corridor filter using a wider half-width (10-20 km for highway corridors) since long-distance trips can deviate further for high-value wardriving.
+- New page `/roadtrip` (or a "Multi-day" toggle on `/plan`). Result UI groups stops by day with totals: "Day 1: 6 stops, 4.5h drive, ~120 new APs."
+- ORS quota awareness: a 10-day roadtrip with 3 stops/day = 30 segments × 2 ORS calls = 60 calls. Free tier (500 opt/day) handles a couple of trips per day. Display estimated ORS calls before submit; refuse plans that would exceed daily quota.
+- GPX output: one GPX file per day (so phone navigation only loads the current day's segment).
+
+**Sequencing:**
+
+1. **6a first** (1-2 sessions). Multi-stop core. Ship. Drive a 3-stop errand run to validate.
+2. **6b after 6a is in prod** (1 session). Arrival-time mode + ntfy alarm.
+3. **6c last** (2-3 sessions). Roadtrip mode. Most UI work, most edge cases, biggest payoff.
+
+**Non-goals for Phase 6:**
+
+- No traffic-aware ETAs (ORS doesn't return live traffic on free tier).
+- No collaborative trip planning (still single-tenant).
+- No "leg home" auto-insert. If the user wants to end at home, they add a "Home" stop.
+
+**Acceptance:**
+
+- 6a: User plans a 3-stop route (daycare → work → coffee shop → home), drives it, GPX navigates all 4 legs correctly, dashboard logs the run.
+- 6b: User says "Be at work by 09:00", planner replies "Leave by 08:23", ntfy fires at 08:18. Drives, arrives within ±5 min.
+- 6c: User plans a 3-day VT → NH → ME roadtrip with 2 overnights, 18 stops total, 6 wardriving cells per day. GPX per day. Total drive matches sum of segments.
+
 ---
 
 ## 4. Hetzner provisioning

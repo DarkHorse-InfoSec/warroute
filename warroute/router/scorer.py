@@ -8,6 +8,12 @@ Inputs:
   - WDGoWars `wdgowars_capture_value` (points-if-captured) when available;
     otherwise derive from ownership status: uncaptured > rival > self.
   - WiGLE `estimated_total_aps` (raw density count from a bbox search).
+
+Two-tier ranking (added 2026-05-14): cells that have actually been queried
+against WiGLE (`estimated_total_aps is not None`) always outrank cells we
+haven't probed yet, regardless of score. Unprobed cells get a unit density
+proxy so they still produce a usable plan in virgin areas - sparse rural
+coverage is the WarRoute use case, not a degenerate path.
 """
 
 from __future__ import annotations
@@ -24,6 +30,13 @@ FALLBACK_VALUE_UNCAPTURED = 100
 FALLBACK_VALUE_RIVAL = 60
 FALLBACK_VALUE_SELF = 5
 
+# Stand-in density for cells we haven't queried WiGLE about yet. Picked so an
+# unprobed uncaptured cell scores 100 - well below any probed cell with even
+# a single AP (which would score 100+ at the same capture_value). Probed cells
+# are always preferred via the two-tier sort in `rank_cells`; this value only
+# matters for ordering *among* unprobed cells.
+UNPROBED_DENSITY_PROXY = 1
+
 
 @dataclass(frozen=True)
 class CellScore:
@@ -34,6 +47,7 @@ class CellScore:
     capture_value: int
     estimated_aps: int
     ownership: str  # 'me' | 'rival' | 'uncaptured'
+    probed: bool  # True if estimated_total_aps came from WiGLE; False if proxy
 
 
 def ownership_label(cell: CellRow) -> str:
@@ -57,9 +71,19 @@ def capture_value_for(cell: CellRow) -> int:
 
 
 def score_cell(cell: CellRow) -> CellScore:
-    """Score one cell. Multiplies capture value by AP density (WiGLE native count)."""
+    """Score one cell. Multiplies capture value by AP density.
+
+    Unprobed cells (no WiGLE reading yet) use `UNPROBED_DENSITY_PROXY` so they
+    still rank above zero, and carry `probed=False` so the planner can sort
+    them into the second tier.
+    """
     value = capture_value_for(cell)
-    density = cell.estimated_total_aps if cell.estimated_total_aps is not None else 0
+    if cell.estimated_total_aps is not None:
+        density = cell.estimated_total_aps
+        probed = True
+    else:
+        density = UNPROBED_DENSITY_PROXY
+        probed = False
     score = float(value) * float(density)
     return CellScore(
         cell_id=cell.id,
@@ -69,11 +93,17 @@ def score_cell(cell: CellRow) -> CellScore:
         capture_value=value,
         estimated_aps=density,
         ownership=ownership_label(cell),
+        probed=probed,
     )
 
 
 def rank_cells(cells: list[CellRow]) -> list[CellScore]:
-    """Score every cell and sort by descending score. Skips cells with no density data."""
-    scored = [score_cell(c) for c in cells if c.estimated_total_aps is not None]
-    scored.sort(key=lambda s: s.score, reverse=True)
+    """Score every cell and sort.
+
+    Probed cells (real WiGLE density) always come before unprobed cells, then
+    descending score within each tier. The intent: when we have data, use it;
+    only fall back to unprobed cells when there's nothing better.
+    """
+    scored = [score_cell(c) for c in cells]
+    scored.sort(key=lambda s: (not s.probed, -s.score))
     return scored

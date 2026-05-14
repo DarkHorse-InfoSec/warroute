@@ -7,6 +7,7 @@ from warroute.router.scorer import (
     FALLBACK_VALUE_RIVAL,
     FALLBACK_VALUE_SELF,
     FALLBACK_VALUE_UNCAPTURED,
+    UNPROBED_DENSITY_PROXY,
     capture_value_for,
     ownership_label,
     rank_cells,
@@ -54,20 +55,50 @@ def test_score_multiplies_value_by_density() -> None:
     assert s.estimated_aps == 10
 
 
-def test_score_treats_missing_density_as_zero() -> None:
+def test_score_uses_proxy_density_when_unprobed() -> None:
     s = score_cell(_row(aps=None, capture_value=20))
-    assert s.score == 0.0
+    assert s.score == 20.0 * UNPROBED_DENSITY_PROXY
+    assert s.probed is False
+    assert s.estimated_aps == UNPROBED_DENSITY_PROXY
 
 
-def test_rank_cells_sorts_descending_and_skips_no_density() -> None:
+def test_score_marks_probed_when_density_present() -> None:
+    s = score_cell(_row(aps=0, capture_value=20))
+    assert s.probed is True
+    assert s.score == 0.0  # legitimate "WiGLE says zero APs here" - still probed
+
+
+def test_rank_cells_sorts_probed_before_unprobed() -> None:
     rows = [
-        _row("low", aps=5, capture_value=10),  # score 50
-        _row("none", aps=None, capture_value=999),  # excluded
-        _row("high", aps=500, capture_value=10),  # score 5000
-        _row("mid", aps=50, capture_value=10),  # score 500
+        _row("low_probed", aps=5, capture_value=10),  # probed, score 50
+        _row("high_unprobed", aps=None, capture_value=999),  # unprobed, would be 999
+        _row("high_probed", aps=500, capture_value=10),  # probed, score 5000
+        _row("mid_probed", aps=50, capture_value=10),  # probed, score 500
     ]
     ranked = rank_cells(rows)
-    assert [s.cell_id for s in ranked] == ["high", "mid", "low"]
+    # All probed first (desc score), then unprobed - regardless of nominal score.
+    assert [s.cell_id for s in ranked] == [
+        "high_probed",
+        "mid_probed",
+        "low_probed",
+        "high_unprobed",
+    ]
+
+
+def test_rank_cells_includes_zero_density_probed_cells() -> None:
+    """A cell with estimated_total_aps=0 was queried; WiGLE knows nothing there.
+
+    It should still rank (as score=0) so the planner can route through it as
+    filler. Only None (never-queried) marks an unprobed cell.
+    """
+    rows = [
+        _row("known_empty", aps=0, capture_value=100),  # probed, score 0
+        _row("never_queried", aps=None, capture_value=100),  # unprobed, score 100
+    ]
+    ranked = rank_cells(rows)
+    # Probed wins the tier-1 sort even at score 0.
+    assert ranked[0].cell_id == "known_empty"
+    assert ranked[1].cell_id == "never_queried"
 
 
 def test_rank_cells_excludes_my_owned_cells_only_via_planner_not_scorer() -> None:

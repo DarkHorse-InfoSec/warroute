@@ -72,10 +72,37 @@ def test_plan_form_renders(client: TestClient) -> None:
     assert 'name="duration_min"' in resp.text
 
 
-def test_plan_post_with_no_cells_renders_error(client: TestClient) -> None:
+@respx.mock
+def test_plan_post_with_no_cells_auto_paints_and_renders_notice(client: TestClient) -> None:
+    """Empty DB no longer fails - planner paints grid, ORS routes, UI shows notice."""
+    from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1800,
+                        "distance": 25000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 25000, "duration": 1800}, "geometry": None}]},
+        )
+    )
+
     resp = client.post("/plan", data={"duration_min": "60", "mode": "loop"})
     assert resp.status_code == 200
-    assert "No scored cells" in resp.text
+    assert "Plan #" in resp.text
+    assert "No coverage data for this area yet" in resp.text or "unprobed" in resp.text.lower()
 
 
 def test_plan_post_oneway_without_destination_errors(client: TestClient) -> None:
@@ -91,7 +118,7 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
     We don't seed the grid; the planner will fail with 'no scored cells' AFTER
     geocoding the query. That tells us the destination-resolution path worked.
     """
-    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, ORS_API_BASE
+    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, OPTIMIZATION_PATH, ORS_API_BASE
 
     geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
         return_value=httpx.Response(
@@ -110,11 +137,28 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
             },
         )
     )
-    # New: oneway now precheck-calls /directions to validate budget covers direct drive.
+    # Oneway precheck-calls /directions to validate budget covers direct drive.
     respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
         return_value=httpx.Response(
             200,
             json={"routes": [{"summary": {"distance": 12000, "duration": 1200}, "geometry": None}]},
+        )
+    )
+    # With auto-paint, the planner gets candidate cells in the corridor and calls
+    # /optimization. Mock it so the plan succeeds.
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 2000,
+                        "distance": 18000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
         )
     )
     # No `destination` hidden value, only `destination_query` typed text.
@@ -132,24 +176,36 @@ def test_plan_post_oneway_falls_back_to_geocoding_typed_query(client: TestClient
     assert geocode_route.called
     # We did NOT bail with "needs a destination" — the fallback resolved it.
     assert "needs a destination" not in resp.text
-    # Planner has no cells -> oneway gracefully falls back to direct route.
-    assert "direct route" in resp.text.lower()
     assert "Plan #" in resp.text
 
 
 @respx.mock
 def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient) -> None:
     """When the hidden destination field is set, don't call the geocoder."""
-    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, ORS_API_BASE
+    from warroute.clients.ors import DIRECTIONS_PATH, GEOCODE_PATH, OPTIMIZATION_PATH, ORS_API_BASE
 
     geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
         return_value=httpx.Response(200, json={"features": []})
     )
-    # Oneway path now precheck-calls /directions for direct-route time.
     respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
         return_value=httpx.Response(
             200,
             json={"routes": [{"summary": {"distance": 12000, "duration": 1200}, "geometry": None}]},
+        )
+    )
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 2000,
+                        "distance": 15000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
         )
     )
     resp = client.post(
@@ -165,10 +221,8 @@ def test_plan_post_oneway_explicit_destination_skips_geocoder(client: TestClient
     )
     assert resp.status_code == 200
     assert not geocode_route.called
-    # Planner has no cells -> falls back to direct route. The hidden field was used
-    # (not the query) and the destination resolved into the direct leg.
+    # The hidden field was used (not the query) and the plan went through.
     assert "Plan #" in resp.text
-    assert "direct route" in resp.text.lower()
 
 
 def test_plan_form_has_start_search_box(client: TestClient) -> None:
@@ -179,6 +233,34 @@ def test_plan_form_has_start_search_box(client: TestClient) -> None:
     assert 'id="start-hits"' in resp.text
     assert 'data-field="start"' in resp.text
     assert 'data-field="destination"' in resp.text
+
+
+def _mock_ors_loop_optimization() -> None:
+    """Helper: install respx mocks for the loop-plan ORS calls. Caller must be inside
+    a @respx.mock-decorated test."""
+    from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 1800,
+                        "distance": 25000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 25000, "duration": 1800}, "geometry": None}]},
+        )
+    )
 
 
 @respx.mock
@@ -199,6 +281,7 @@ def test_plan_post_loop_uses_start_typed_query_via_geocoder(client: TestClient) 
             },
         )
     )
+    _mock_ors_loop_optimization()
     resp = client.post(
         "/plan",
         data={
@@ -210,8 +293,8 @@ def test_plan_post_loop_uses_start_typed_query_via_geocoder(client: TestClient) 
     )
     assert resp.status_code == 200
     assert geocode_route.called
-    # Planner fails downstream (no cells) but the start path succeeded.
-    assert "No scored cells" in resp.text
+    # The start path succeeded and the plan went through.
+    assert "Plan #" in resp.text
 
 
 @respx.mock
@@ -222,6 +305,7 @@ def test_plan_post_explicit_start_skips_geocoder(client: TestClient) -> None:
     geocode_route = respx.get(ORS_API_BASE + GEOCODE_PATH).mock(
         return_value=httpx.Response(200, json={"features": []})
     )
+    _mock_ors_loop_optimization()
     resp = client.post(
         "/plan",
         data={
@@ -233,18 +317,19 @@ def test_plan_post_explicit_start_skips_geocoder(client: TestClient) -> None:
     )
     assert resp.status_code == 200
     assert not geocode_route.called
-    assert "No scored cells" in resp.text
+    assert "Plan #" in resp.text
 
 
+@respx.mock
 def test_plan_post_blank_start_uses_settings_home(client: TestClient) -> None:
-    """Empty start fields fall back to .env home — no geocoder call needed."""
-    # No respx.mock decorator: this should NOT hit the network.
+    """Empty start fields fall back to .env home."""
+    _mock_ors_loop_optimization()
     resp = client.post(
         "/plan",
         data={"duration_min": "60", "mode": "loop", "start": "", "start_query": ""},
     )
     assert resp.status_code == 200
-    assert "No scored cells" in resp.text
+    assert "Plan #" in resp.text
 
 
 @respx.mock
@@ -330,11 +415,13 @@ def test_plan_post_falls_back_to_direct_route_when_no_cells_fit(
     client: TestClient,
 ) -> None:
     """When the planner can't fit any cells in the budget, oneway plans fall back
-    to a direct-only route instead of erroring. User still gets a GMaps link."""
+    to a direct-only route instead of erroring. User still gets a GMaps link.
+
+    With auto-paint, "no cells" no longer triggers this path; the trigger is the
+    planner exhausting back-off (ORS always returns over-budget durations).
+    """
     from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
 
-    # No cells seeded -> planner will raise "no scored cells" PlannerError.
-    # Directions mock provides the direct leg for the fallback.
     respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
         return_value=httpx.Response(
             200,
@@ -348,9 +435,23 @@ def test_plan_post_falls_back_to_direct_route_when_no_cells_fit(
             },
         )
     )
-    # Optimization mock not strictly needed (planner fails before calling it)
-    # but included so respx doesn't error if the planner does try.
-    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(return_value=httpx.Response(200, json={}))
+    # Always over-budget: 99999s >> any budget. Planner halves chosen list until
+    # MIN_WAYPOINTS then raises -> oneway path catches and renders direct fallback.
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 99999,
+                        "distance": 99999,
+                        "steps": [{"type": "job", "job": 0}],
+                    }
+                ]
+            },
+        )
+    )
 
     resp = client.post(
         "/plan",
@@ -362,27 +463,68 @@ def test_plan_post_falls_back_to_direct_route_when_no_cells_fit(
         },
     )
     assert resp.status_code == 200
-    # The plan_result page rendered (not the form with an error).
     assert "Plan #" in resp.text
-    # And the user sees a clear notice explaining why there are no cells.
     assert "direct route" in resp.text.lower()
     assert "Could not fit" in resp.text
 
 
 @respx.mock
-def test_plan_post_loop_with_no_cells_falls_through_to_form(client: TestClient) -> None:
-    """Loop with empty DB: no candidates -> exc.last_attempted_min is None ->
-    auto-bump retry uses 2*budget=40 min. Still no cells -> form re-renders with
-    a clear 'no viable plan' message."""
+def test_plan_post_loop_auto_bumps_when_ors_says_over_budget(client: TestClient) -> None:
+    """Loop where the budget is too tight for what ORS computes -> auto-bump retry.
+
+    With auto-paint, "empty DB" is no longer the trigger; the trigger is ORS
+    returning over-budget durations. First call over, second call (at bumped
+    budget) under -> result page renders with the loop_bumped_notice.
+    """
+    from warroute.clients.ors import DIRECTIONS_PATH, OPTIMIZATION_PATH, ORS_API_BASE
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        side_effect=[
+            # First plan @ requested budget: way over -> raises after back-off exhausts.
+            httpx.Response(
+                200,
+                json={
+                    "routes": [
+                        {
+                            "vehicle": 1,
+                            "duration": 99999,
+                            "distance": 99999,
+                            "steps": [{"type": "job", "job": 0}],
+                        }
+                    ]
+                },
+            ),
+            # Retry at bumped budget: fits.
+            httpx.Response(
+                200,
+                json={
+                    "routes": [
+                        {
+                            "vehicle": 1,
+                            "duration": 1500,
+                            "distance": 20000,
+                            "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 1500}, "geometry": None}]},
+        )
+    )
     resp = client.post(
         "/plan",
         data={"duration_min": "20", "mode": "loop", "start": "", "start_query": ""},
     )
     assert resp.status_code == 200
-    # Either auto-bump-also-failed message OR the original "no scored cells" passes
-    # through. Both are acceptable, both surface on the form (not a 500 / dead-end).
     text = resp.text.lower()
-    assert "no scored cells" in text or "no viable plan" in text or "auto-bump" in text
+    # Either we got the bumped plan or - if ORS exhausts both attempts - the
+    # form re-render. Both are acceptable, both end in a non-500 user-visible result.
+    assert "plan #" in text or "no viable plan" in text or "auto-bump" in text
 
 
 @respx.mock

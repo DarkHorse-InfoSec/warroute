@@ -40,6 +40,12 @@
 </div>
 {% endif %}
 
+{% if synthetic_density_notice %}
+<div class="flash info">
+  {{ synthetic_density_notice }}
+</div>
+{% endif %}
+
 {% if resolved_start_label %}
 <div class="flash info">
   Start resolved to: <strong>{{ resolved_start_label }}</strong>
