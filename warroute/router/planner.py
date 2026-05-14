@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from warroute.clients.ors import (
     MAX_OPTIMIZATION_JOBS,
@@ -319,7 +319,7 @@ def _persist_plan(
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                datetime.utcnow().isoformat(),
+                datetime.now(UTC).replace(tzinfo=None).isoformat(),
                 request.home_lat,
                 request.home_lon,
                 request.duration_min,

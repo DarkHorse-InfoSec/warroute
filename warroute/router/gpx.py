@@ -8,7 +8,7 @@ on Android; it caps at 9 waypoints + destination.
 from __future__ import annotations
 
 import urllib.parse
-from datetime import datetime
+from datetime import UTC, datetime
 from xml.etree import ElementTree as ET
 
 from warroute.clients.ors import Waypoint
@@ -40,7 +40,9 @@ def write_gpx(
     ET.SubElement(metadata, f"{{{GPX_NS}}}name").text = name
     if description:
         ET.SubElement(metadata, f"{{{GPX_NS}}}desc").text = description
-    ET.SubElement(metadata, f"{{{GPX_NS}}}time").text = datetime.utcnow().isoformat() + "Z"
+    ET.SubElement(metadata, f"{{{GPX_NS}}}time").text = datetime.now(UTC).strftime(
+        "%Y-%m-%dT%H:%M:%S.%fZ"
+    )
 
     for wp in waypoints:
         wpt = ET.SubElement(
