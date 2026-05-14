@@ -46,6 +46,18 @@
 </div>
 {% endif %}
 
+{% if result.departure_at and request_data.arrive_by %}
+<div class="flash info" style="font-size: 1.05rem;">
+  <strong>Leave at {{ result.departure_at.strftime("%H:%M") }}</strong>
+  ({{ result.departure_at.strftime("%a %b %d") }})
+  to arrive by {{ request_data.arrive_by.strftime("%H:%M") }}.
+  Trip total: {{ "%.0f"|format(result.total_trip_min) }} min
+  ({{ "%.0f"|format(result.estimated_drive_min) }} drive
+  {% if request_data.total_dwell_min() %}+ {{ request_data.total_dwell_min() }} dwell{% endif %}
+  + 2 min buffer).
+</div>
+{% endif %}
+
 {% if resolved_start_label %}
 <div class="flash info">
   Start resolved to: <strong>{{ resolved_start_label }}</strong>
