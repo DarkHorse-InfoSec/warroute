@@ -1,0 +1,56 @@
+[Unit]
+Description=WarRoute web UI (FastAPI + uvicorn)
+Documentation=https://github.com/DarkHorse-InfoSec/warroute
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=warroute
+Group=warroute
+WorkingDirectory=/home/warroute/warroute
+
+# Secrets live in /etc/warroute/warroute.env (owner root, mode 600).
+# warroute user reads these via systemd, never via direct file access.
+# pydantic-settings picks them up from the environment, not from .env when running here.
+EnvironmentFile=/etc/warroute/warroute.env
+
+# Override defaults for production paths.
+Environment=DATABASE_URL=sqlite:////var/lib/warroute/warroute.db
+Environment=SPOOL_DIR=/var/spool/warroute/in
+Environment=GPX_OUT_DIR=/var/lib/warroute/gpx
+
+# ProtectHome=read-only blocks ~/.cache, so point uv + HOME at a writable
+# path inside the ReadWritePaths list. Without this, uv crash-loops on
+# "Could not acquire lock: Read-only file system" at /home/warroute/.cache/uv.
+Environment=HOME=/home/warroute/warroute
+Environment=UV_CACHE_DIR=/home/warroute/warroute/.uv-cache
+
+# Bind to localhost only; Caddy fronts TLS + basic-auth.
+ExecStart=/usr/local/bin/uv run --project /home/warroute/warroute warroute serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5s
+
+# --- hardening ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/warroute /var/spool/warroute /home/warroute/warroute
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+# Filesystem limits
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

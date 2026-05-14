@@ -20,43 +20,70 @@ from warroute.clients.wdgowars import (
 
 
 @respx.mock
-async def test_me_projects_known_fields() -> None:
+async def test_me_projects_real_response_shape() -> None:
+    """Mirrors the actual /api/me response (probed 2026-05-11)."""
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
         return_value=httpx.Response(
             200,
             json={
-                "username": "Darkhorse",
-                "points": 12345,
-                "daily_quota_remaining": 18000,
-                "owned_cells": ["44.93000_-72.21600", "44.94800_-72.21600"],
-                "extra_field": "ignored-but-preserved",
+                "ok": True,
+                "username": "darkhorse",
+                "country": "US",
+                "joined": "2026-04-12",
+                "is_superuser": False,
+                "trusted": True,
+                "gang": "Biscuits",
+                "wifi": 34870,
+                "ble": 26949,
+                "total": 61819,
+                "recent_today": 0,
+                "recent_7d": 11682,
+                "badges": ["wigle_user", "first_blood"],
             },
         )
     )
     async with WdgowarsClient() as wdg:
         player = await wdg.me()
-    assert player.username == "Darkhorse"
-    assert player.points == 12345
-    assert player.daily_quota_remaining == 18000
-    assert player.owned_cell_ids == ["44.93000_-72.21600", "44.94800_-72.21600"]
-    assert player.raw["extra_field"] == "ignored-but-preserved"
+    assert player.username == "darkhorse"
+    assert player.total == 61819
+    assert player.points == 61819  # property alias
+    assert player.wifi == 34870
+    assert player.ble == 26949
+    assert player.recent_today == 0
+    assert player.daily_quota_remaining == 20000  # 20000 - recent_today
+    assert player.owned_cell_ids == []
+    assert player.raw["gang"] == "Biscuits"
 
 
 @respx.mock
 async def test_me_handles_alternative_field_names() -> None:
-    """Be lenient: WDGoWars docs are unknown so we tolerate name variants."""
+    """Tolerate older or alternative shapes too (e.g. `points` instead of `total`)."""
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
         return_value=httpx.Response(
             200,
-            json={"name": "alt", "score": 7, "quota_remaining": 5, "territory": ["c1"]},
+            json={"name": "alt", "points": 7, "quota_remaining": 5, "territory": ["c1"]},
         )
     )
     async with WdgowarsClient() as wdg:
         player = await wdg.me()
     assert player.username == "alt"
+    assert player.total == 7
     assert player.points == 7
     assert player.daily_quota_remaining == 5
     assert player.owned_cell_ids == ["c1"]
+
+
+@respx.mock
+async def test_me_derives_quota_when_recent_today_present() -> None:
+    """When /api/me only reports recent_today, derive remaining = 20000 - recent_today."""
+    respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
+        return_value=httpx.Response(
+            200, json={"username": "x", "total": 0, "wifi": 0, "ble": 0, "recent_today": 1500}
+        )
+    )
+    async with WdgowarsClient() as wdg:
+        player = await wdg.me()
+    assert player.daily_quota_remaining == 18500
 
 
 @respx.mock
@@ -129,10 +156,12 @@ def test_missing_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @respx.mock
-async def test_authorization_header_is_bearer() -> None:
+async def test_auth_header_is_x_api_key() -> None:
     route = respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
         return_value=httpx.Response(200, json={"username": "x"})
     )
     async with WdgowarsClient() as wdg:
         await wdg.me()
-    assert route.calls.last.request.headers["authorization"].startswith("Bearer ")
+    headers = route.calls.last.request.headers
+    assert "x-api-key" in headers
+    assert "authorization" not in headers

@@ -18,7 +18,9 @@ app = typer.Typer(
     help="Wardriving route planner and dual-uploader.",
     no_args_is_help=True,
 )
-coverage_app = typer.Typer(name="coverage", help="Cell ownership + AP density.", no_args_is_help=True)
+coverage_app = typer.Typer(
+    name="coverage", help="Cell ownership + AP density.", no_args_is_help=True
+)
 app.add_typer(coverage_app, name="coverage")
 console = Console()
 
@@ -76,15 +78,15 @@ def coverage_refresh(
     from warroute.coverage.sync import refresh
 
     run_migrations()
-    summary = asyncio.run(
-        refresh(home_lat=home_lat, home_lon=home_lon, radius_km=radius_km)
-    )
+    summary = asyncio.run(refresh(home_lat=home_lat, home_lon=home_lon, radius_km=radius_km))
     console.print(f"Cells in radius:     {summary.cells_total}")
     console.print(f"  newly painted:     {summary.cells_inserted}")
     console.print(f"  density refreshed: {summary.cells_density_refreshed}")
     console.print(f"  density failed:    {summary.cells_density_failed}")
     if summary.wdgowars_synced:
-        console.print(f"WDGoWars: [green]synced[/green]  owned-by-me cells: {summary.cells_owned_by_me}")
+        console.print(
+            f"WDGoWars: [green]synced[/green]  owned-by-me cells: {summary.cells_owned_by_me}"
+        )
     else:
         console.print(f"WDGoWars: [yellow]skipped[/yellow]  ({summary.wdgowars_error})")
 
@@ -106,6 +108,179 @@ def coverage_report(
     run_migrations()
     summary = build_summary(home_lat, home_lon, radius_km, top_n=top)
     console.print(format_summary(summary))
+
+
+@app.command()
+def upload(
+    csv_file: str = typer.Argument(..., help="Path to a WigleWifi-1.6 CSV"),
+    source: str = typer.Option("wigle-android", help="Producer label for the sessions row"),
+) -> None:
+    """One-shot ingest: parse, dual-upload to WiGLE + WDGoWars, record session."""
+    from pathlib import Path
+
+    from warroute.uploader.orchestrator import ingest
+
+    path = Path(csv_file)
+    if not path.exists():
+        console.print(f"[red]No such file: {path}[/red]")
+        raise typer.Exit(code=1)
+
+    run_migrations()
+    result = asyncio.run(ingest(path, source=source))
+
+    if result.already_seen:
+        console.print(
+            f"[yellow]Already ingested[/yellow] (session {result.session_id}). "
+            f"sha256={result.csv_sha256[:12]}"
+        )
+        return
+
+    wigle_label = "ok" if hasattr(result.wigle, "success") else result.wigle
+    wdg_label = "ok" if hasattr(result.wdgowars, "success") else result.wdgowars
+    console.print(
+        f"[green]Session {result.session_id}[/green]: "
+        f"{result.total_aps} APs ({result.new_aps} new). "
+        f"WiGLE: {wigle_label}. WDGoWars: {wdg_label}."
+    )
+
+
+@app.command()
+def watch(
+    spool_dir: str = typer.Option(None, help="Override SPOOL_DIR from .env"),
+    source: str = typer.Option("wigle-android", help="Producer label for ingested CSVs"),
+) -> None:
+    """Daemon: watch SPOOL_DIR for new CSVs and ingest them as they arrive."""
+    from pathlib import Path
+
+    from warroute.uploader.watcher import watch as run_watcher
+
+    run_migrations()
+    target = Path(spool_dir) if spool_dir else None
+    console.print("[green]Watching for CSVs[/green]. Ctrl-C to stop.")
+    run_watcher(spool_dir=target, source=source)
+
+
+@app.command()
+def plan(
+    duration_min: int = typer.Option(90, "--duration", "-d", help="Time budget in minutes"),
+    mode: str = typer.Option("loop", "--mode", "-m", help="loop or oneway"),
+    home_lat: float = typer.Option(None, help="Override HOME_LAT"),
+    home_lon: float = typer.Option(None, help="Override HOME_LON"),
+    destination: str = typer.Option(None, "--destination", help="LAT,LON for oneway mode"),
+    out: str = typer.Option("drive.gpx", "--out", "-o", help="GPX output path"),
+) -> None:
+    """Plan a wardriving route from home, optimized for new-AP yield within the time budget."""
+    from pathlib import Path
+
+    from warroute.router.gpx import google_maps_url, write_gpx
+    from warroute.router.planner import PlannerError, PlanRequest
+    from warroute.router.planner import plan as run_plan
+
+    settings = get_settings()
+    if mode not in ("loop", "oneway"):
+        console.print(f"[red]Invalid --mode '{mode}'; use 'loop' or 'oneway'.[/red]")
+        raise typer.Exit(code=2)
+
+    dest_lat: float | None = None
+    dest_lon: float | None = None
+    if mode == "oneway":
+        if not destination:
+            console.print("[red]oneway mode requires --destination LAT,LON[/red]")
+            raise typer.Exit(code=2)
+        try:
+            dest_lat_s, dest_lon_s = destination.split(",")
+            dest_lat = float(dest_lat_s)
+            dest_lon = float(dest_lon_s)
+        except ValueError as exc:
+            console.print(f"[red]Invalid --destination: {exc}[/red]")
+            raise typer.Exit(code=2) from exc
+
+    request = PlanRequest(
+        home_lat=home_lat if home_lat is not None else settings.home_lat,
+        home_lon=home_lon if home_lon is not None else settings.home_lon,
+        duration_min=duration_min,
+        mode=mode,
+        destination_lat=dest_lat,
+        destination_lon=dest_lon,
+    )
+
+    run_migrations()
+    try:
+        result = asyncio.run(run_plan(request))
+    except PlannerError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gpx_xml = write_gpx(
+        result.ordered_waypoints,
+        track_points=None,
+        name=f"WarRoute {request.duration_min}min {request.mode}",
+        description=f"{len(result.chosen_cells)} cells, ~{result.estimated_new_aps} new APs",
+    )
+    out_path.write_text(gpx_xml, encoding="utf-8")
+
+    console.print(
+        f"[green]Plan {result.planned_route_id}[/green]: "
+        f"{len(result.chosen_cells)} cells, "
+        f"~{result.estimated_new_aps} new APs, "
+        f"{result.estimated_drive_min:.1f} min, "
+        f"{result.leg.distance_km:.1f} km"
+    )
+    if result.drops_for_slack:
+        console.print(f"  Dropped to fit budget: {len(result.drops_for_slack)} cells")
+    console.print(f"  GPX: {out_path}")
+    console.print(f"  Maps: {google_maps_url(result.ordered_waypoints)}")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Bind address. Use 0.0.0.0 to expose on LAN."),
+    port: int = typer.Option(8000, help="Port"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes (dev only)"),
+) -> None:
+    """Start the FastAPI web UI."""
+    import uvicorn
+
+    run_migrations()
+    console.print(f"[green]WarRoute serving on http://{host}:{port}[/green]")
+    uvicorn.run("warroute.web.app:app", host=host, port=port, reload=reload, log_level="info")
+
+
+@app.command()
+def precheck() -> None:
+    """Pre-drive sanity check: verify external APIs + filesystem are ready.
+
+    Hits WIGLE, WDGoWars, and ORS with auth-check calls (concurrently) plus
+    writability checks on SPOOL_DIR and GPX_OUT_DIR. Reports per-check status
+    and an overall verdict. Exits 0 on PASS, 1 on WARN, 2 on FAIL so you can
+    chain it into shell scripts or a pre-flight phone shortcut.
+
+    Do NOT run from a network with TLS interception (e.g. school PC on NCSUVT
+    Fortinet network); tokens transit through the inspection device. See
+    DECISIONS.md 2026-05-11 entry.
+    """
+    from warroute.precheck import Status, run_all, verdict
+
+    results = asyncio.run(run_all())
+    for r in results:
+        color = {
+            Status.OK: "green",
+            Status.WARN: "yellow",
+            Status.FAIL: "red",
+        }[r.status]
+        label = f"[{color}]{r.status.value.upper():4}[/{color}]"
+        console.print(f"{label}  {r.name:12} {r.detail}")
+        if r.hint:
+            console.print(f"        [dim]hint:[/dim] {r.hint}")
+    overall = verdict(results)
+    color = {Status.OK: "green", Status.WARN: "yellow", Status.FAIL: "red"}[overall]
+    console.print(f"\n[{color}]Overall: {overall.value.upper()}[/{color}]")
+    if overall == Status.FAIL:
+        raise typer.Exit(code=2)
+    if overall == Status.WARN:
+        raise typer.Exit(code=1)
 
 
 @coverage_app.command("probe-wdgowars")

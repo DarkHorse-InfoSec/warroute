@@ -34,13 +34,11 @@ def build_summary(
     uncaptured = sum(1 for r in rows if not r.wdgowars_owner)
 
     unexplored = [
-        r for r in rows
-        if r.wdgowars_owner != OWNER_ME and r.estimated_total_aps is not None
+        r for r in rows if r.wdgowars_owner != OWNER_ME and r.estimated_total_aps is not None
     ]
     unexplored.sort(key=lambda r: r.estimated_total_aps or 0, reverse=True)
     top = [
-        (r.id, r.estimated_total_aps or 0, r.center_lat, r.center_lon)
-        for r in unexplored[:top_n]
+        (r.id, r.estimated_total_aps or 0, r.center_lat, r.center_lon) for r in unexplored[:top_n]
     ]
 
     return CoverageSummary(

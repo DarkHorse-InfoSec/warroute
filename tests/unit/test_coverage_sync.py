@@ -27,9 +27,7 @@ async def test_refresh_paints_grid_and_records_density() -> None:
         )
     )
     respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 23, "results": []}
-        )
+        return_value=httpx.Response(200, json={"success": True, "totalResults": 23, "results": []})
     )
 
     run_migrations()
@@ -55,10 +53,7 @@ async def test_refresh_marks_owned_cells() -> None:
     assert summary.cells_total > 0
 
     with transaction() as conn:
-        seeded_ids = [
-            row["id"]
-            for row in conn.execute("SELECT id FROM cells LIMIT 2").fetchall()
-        ]
+        seeded_ids = [row["id"] for row in conn.execute("SELECT id FROM cells LIMIT 2").fetchall()]
 
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(
         return_value=httpx.Response(
@@ -66,9 +61,7 @@ async def test_refresh_marks_owned_cells() -> None:
         )
     )
     respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 0, "results": []}
-        )
+        return_value=httpx.Response(200, json={"success": True, "totalResults": 0, "results": []})
     )
 
     summary = await refresh(home_lat=44.9367, home_lon=-72.2051, radius_km=4)
@@ -79,9 +72,7 @@ async def test_refresh_marks_owned_cells() -> None:
 async def test_refresh_continues_when_wdgowars_fails() -> None:
     respx.get(WDGOWARS_API_BASE + ME_PATH).mock(return_value=httpx.Response(500))
     respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 5, "results": []}
-        )
+        return_value=httpx.Response(200, json={"success": True, "totalResults": 5, "results": []})
     )
 
     run_migrations()
@@ -111,8 +102,6 @@ async def _seed_no_external(radius: float):  # type: ignore[no-untyped-def]
         return_value=httpx.Response(200, json={"username": "x", "points": 0, "owned_cells": []})
     )
     respx.get(WIGLE_API_BASE + SEARCH_PATH).mock(
-        return_value=httpx.Response(
-            200, json={"success": True, "totalResults": 0, "results": []}
-        )
+        return_value=httpx.Response(200, json={"success": True, "totalResults": 0, "results": []})
     )
     return await refresh(home_lat=44.9367, home_lon=-72.2051, radius_km=radius)

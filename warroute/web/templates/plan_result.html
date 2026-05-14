@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Plan #{{ result.planned_route_id }}{% endblock %}
+{% block content %}
+<h1>Plan #{{ result.planned_route_id }}</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Cells picked</div>
+    <div class="value">{{ result.chosen_cells|length }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Estimated new APs</div>
+    <div class="value">{{ "{:,}".format(result.estimated_new_aps) }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Drive time</div>
+    <div class="value">{{ "%.0f"|format(result.estimated_drive_min) }} min</div>
+    {% if direct_min %}
+      <div class="label" style="margin-top: 0.4rem;">
+        Direct: {{ "%.0f"|format(direct_min) }} min
+        &middot; Detour: +{{ "%.0f"|format(result.estimated_drive_min - direct_min) }} min
+      </div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="label">Distance</div>
+    <div class="value">{{ "%.1f"|format(result.leg.distance_km) }} km</div>
+  </div>
+</div>
+
+{% if direct_fallback_notice %}
+<div class="flash warn">
+  {{ direct_fallback_notice }}
+</div>
+{% endif %}
+
+{% if loop_bumped_notice %}
+<div class="flash warn">
+  {{ loop_bumped_notice }}
+</div>
+{% endif %}
+
+{% if resolved_start_label %}
+<div class="flash info">
+  Start resolved to: <strong>{{ resolved_start_label }}</strong>
+</div>
+{% endif %}
+
+{% if resolved_destination_label %}
+<div class="flash info">
+  Destination resolved to: <strong>{{ resolved_destination_label }}</strong>
+</div>
+{% endif %}
+
+{% if result.drops_for_slack %}
+<div class="flash warn">
+  Dropped {{ result.drops_for_slack|length }} cell(s) to fit budget.
+</div>
+{% endif %}
+
+<div id="map" data-waypoints='{{ waypoints_geojson|tojson }}'
+     {% if route_geometry %}data-geometry='{{ route_geometry|tojson }}'{% endif %}
+     data-home-lat="{{ request_data.home_lat }}" data-home-lon="{{ request_data.home_lon }}"></div>
+
+<p style="margin-top: 0.75rem;">
+  <a class="btn" href="{{ maps_url }}" target="_blank" rel="noopener">Open in Google Maps</a>
+  <a class="btn secondary" href="/plan/{{ result.planned_route_id }}/gpx">Download GPX</a>
+  <a class="btn secondary" href="/plan">Plan another</a>
+</p>
+
+{% if result.chosen_cells %}
+<h2>Picked cells</h2>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Cell</th>
+      <th>Ownership</th>
+      <th>Capture value</th>
+      <th>Est. APs</th>
+      <th>Score</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in result.chosen_cells %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ c.cell_id }}</td>
+      <td>
+        {% if c.ownership == "uncaptured" %}<span class="badge warn">uncaptured</span>
+        {% elif c.ownership == "rival" %}<span class="badge bad">rival</span>
+        {% else %}<span class="badge good">mine</span>{% endif %}
+      </td>
+      <td>{{ c.capture_value }}</td>
+      <td>{{ c.estimated_aps }}</td>
+      <td>{{ "%.0f"|format(c.score) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script>
+window.addEventListener("DOMContentLoaded", function () {
+  var el = document.getElementById("map");
+  var waypoints = JSON.parse(el.dataset.waypoints);
+  var geometry = el.dataset.geometry ? JSON.parse(el.dataset.geometry) : null;
+  var homeLat = parseFloat(el.dataset.homeLat);
+  var homeLon = parseFloat(el.dataset.homeLon);
+
+  var map = L.map("map").setView([homeLat, homeLon], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  if (geometry && typeof geometry === "object" && geometry.type) {
+    L.geoJSON(geometry, { style: { color: "#22d3ee", weight: 4, opacity: 0.85 } }).addTo(map);
+  }
+
+  var bounds = [];
+  L.geoJSON(waypoints, {
+    pointToLayer: function (feature, latlng) {
+      bounds.push([latlng.lat, latlng.lng]);
+      return L.circleMarker(latlng, {
+        radius: 7,
+        color: "#0e0f12",
+        weight: 2,
+        fillColor: "#22d3ee",
+        fillOpacity: 1
+      }).bindPopup(feature.properties.label || ("Stop " + feature.properties.order));
+    }
+  }).addTo(map);
+  if (bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
+});
+</script>
+{% endblock %}

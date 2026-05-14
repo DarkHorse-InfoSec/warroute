@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p style="color: var(--muted);">Read-only. Edit <code>.env</code> on disk to change values, then restart.</p>
+
+<table>
+  <thead><tr><th>Key</th><th>Value</th></tr></thead>
+  <tbody>
+    {% for key, value in rows %}
+    <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p style="color: var(--muted); font-size: 13px;">
+  API keys are masked to last-4. Full values never reach the browser.
+</p>
+{% endblock %}

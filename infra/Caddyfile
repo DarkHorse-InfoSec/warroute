@@ -1,0 +1,57 @@
+# WarRoute Caddyfile -- TLS via Let's Encrypt + HTTP basic auth at the edge.
+#
+# Install to /etc/caddy/Caddyfile and run:
+#   systemctl reload caddy
+#
+# Single-tenant by design. No login form, no JWT, no session. Caddy challenges
+# at the reverse-proxy layer; warroute itself trusts the connection.
+
+warroute.darkhorseinfosec.com {
+    # ----- Basic auth -----
+    # Initial operator account. Generate the hash with:
+    #   caddy hash-password --plaintext '<YOUR_PASSWORD>'
+    # Paste the bcrypt hash (the long $2a$... string) below.
+    #
+    # Tester accounts (beta phase) are added/removed via:
+    #   infra/add-tester.sh <username>
+    #   infra/remove-tester.sh <username>
+    # which append/strip lines inside this block and reload Caddy.
+    # See DECISIONS.md 2026-05-14 for the multi-user-basic-auth rationale.
+    basic_auth {
+        domenic REPLACE_WITH_BCRYPT_HASH_FROM_CADDY_HASH_PASSWORD
+    }
+
+    # ----- Reverse proxy to the uvicorn worker bound on localhost -----
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # ----- Security headers -----
+    header {
+        # No third-party content lives on this domain, so be aggressive.
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        # CSP intentionally loose for Leaflet + HTMX CDN usage; tighten if those move local.
+        Content-Security-Policy   "default-src 'self'; img-src 'self' data: https://*.tile.openstreetmap.org https://*.basemaps.cartocdn.com; script-src 'self' 'unsafe-inline' https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self'"
+        # Remove the default Caddy server header.
+        -Server
+    }
+
+    # ----- Logging -----
+    log {
+        output file /var/log/caddy/warroute.access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h  # 30 days
+        }
+        format json
+        level INFO
+    }
+}
+
+# Optional: redirect bare apex / www if you ever add them. Not needed for the
+# subdomain-only deployment.

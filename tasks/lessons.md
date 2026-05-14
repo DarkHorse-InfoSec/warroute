@@ -22,6 +22,71 @@ Updated whenever Domenic corrects an approach or confirms a non-obvious choice.
 **Rule going forward:** Use OpenRouteService API as the routing backend; do not reintroduce self-hosted OSRM. Worldwide OSM extracts (~120 GB, ~32 GB RAM) won't fit on a CPX21 anyway.
 **Why:** Single-user app, but the user travels. Worldwide coverage is a requirement, not a stretch goal.
 
+### 2026-05-10 - Phase ordering is canonical, never skip
+
+**Trigger:** Domenic said "After [commit] move onto Phase 2." I interpreted as "skip Phase 1." He had told me earlier (in a /btw I missed) NOT to skip phases.
+**Correction:** Build PLAN.md phases strictly in numeric order.
+**Rule going forward:** "Move onto Phase N" means continue the sequence, not skip ahead. If user names a phase, verify it's the next un-built phase; if not, ask before skipping.
+**Why:** Skipping Phase 1 caused Phase 2 and Phase 3 PRs to land before Phase 1, creating awkward branch dependencies. The repair cost (rebuilding Phase 1 on top of Phase 2 retroactively) far exceeded the cost of asking for clarification up front.
+
+### 2026-05-10 - Don't use `or` chains on JSON dict values when 0/False are valid
+
+**Trigger:** WDGoWars `/api/me` parser: `payload.get("daily_quota_remaining") or payload.get("daily_remaining") or ...`. When the API returned `daily_quota_remaining: 0`, `or` treated 0 as falsy and fell through to defaults, masking the actual zero quota.
+**Correction:** Use explicit key-presence checks (`_first_present(payload, *keys)`) when the value 0/False/'' is semantically distinct from "missing."
+**Rule going forward:** `dict.get(...) or dict.get(...)` is fine for "first non-None string-ish value." For numeric or boolean fields where 0/False are valid, use `for k in keys: if k in payload: return payload[k]`.
+**Why:** This bug silently bypassed the WDGoWars quota check in production-like scenarios, allowing uploads that should have been deferred. Caught only because the unit test set `daily_quota_remaining: 0` and asserted the skip path was taken.
+
+### 2026-05-11 - On unknown networks, cert-chain-check before transmitting any API token
+
+**Trigger:** Started the WDGoWars territory probe on the school PC. First HTTPS call hit `[SSL: CERTIFICATE_VERIFY_FAILED]`. Instinct was "stale certifi bundle, set verify=False and move on."
+
+**Correction:** Ran `openssl s_client` first. Cert chain terminated at a FortiGate inspection device (`O=Fortinet, CN=FG6H0FTB22903890`). The school's NCSUVT network is performing TLS MITM on outbound HTTPS. Setting `verify=False` would have transmitted the WDGOWARS_TOKEN (and any other API token in the same session: WIGLE, ORS) in plaintext to school IT's inspection logs.
+
+**Rule going forward:**
+1. When working from the school PC (or any non-home/non-VPS network), run `openssl s_client -showcerts -servername <host> -connect <host>:443 2>&1 | grep -E "(issuer|subject|verify)"` BEFORE letting any code make an authenticated HTTPS call. If the issuer is a vendor name (Fortinet, Palo Alto, Zscaler, Cisco, Barracuda, Forcepoint, Sophos, F5, SonicWall) and not a real public CA, the network is intercepting. Defer to a clean network.
+2. NEVER bypass cert verification to "make it work" against an authenticated endpoint. Python's secure-by-default behavior is the safety mechanism, not a bug.
+3. Continue offline-safe work locally (code, mocked tests, docs, infra artifacts) and surface the network finding to Domenic immediately. Don't try to debug around it silently.
+
+**Why:** Python aborted the handshake before the token was sent, so no leak occurred on the first run. A bypass would have sent the tokens to the Fortinet device on every call. Rule #1 (never let a secret reach output) applies to network egress, not just chat egress. Full write-up in `DECISIONS.md` 2026-05-11 entry; generalized lesson in global memory at `feedback_verify_tls_chain_before_sending_tokens.md`.
+
+---
+
+### 2026-05-11 - Probe undocumented APIs empirically; don't guess auth scheme
+
+**Trigger:** Assumed WDGoWars used `Authorization: Bearer <token>` based on PLAN.md prose. First real call 401'd. Spent a moment debugging the token before realizing the auth *style* might be wrong.
+**Correction:** Wrote a one-off script that tried 7 common API auth styles in parallel and printed only the response status (no token in output). Found `X-API-Key`. Took ~30 seconds.
+**Rule going forward:** When a real API call rejects auth, default to "is the auth scheme right?" before "is the token wrong?" Spend the 30 seconds to script-probe alternatives. Never log/echo the token while doing it. Delete the probe script after.
+**Why:** Tokens almost never silently rotate. Auth scheme guesses, however, are a coin-flip across `Bearer`, raw, `X-API-Key`, `Token`, query-param, etc. Empirical probe is faster and more reliable than reading docs (which may not exist).
+
+### 2026-05-11 - When in doubt about response shape, probe before mapping
+
+**Trigger:** Built `WdgowarsClient.me()` projecting fields named `points`, `daily_quota_remaining`, `owned_cells` based on what PLAN.md *implied* the API returned. The real `/api/me` had none of them: it has `total`, `wifi`, `recent_today`, and only counts (not IDs) for territory.
+**Correction:** Probe `/api/me` first; map fields against the real shape; preserve the full payload in `.raw` so future code can extend without re-probing.
+**Rule going forward:** Add a `probe(path)` method to any client that talks to an undocumented service. Run it once against the real account before writing parser code. Save the response shape to a project memory entry so future sessions can refer back without re-probing.
+**Why:** The fields we assumed didn't exist meant the dashboard would have shown zeros for everything; the quota check would have been moot. Caught early because we built `probe` first; would have been a painful surprise on first deploy otherwise.
+
+### 2026-05-11 - Windows + Git Bash auto-converts Unix paths in CLI args
+
+**Trigger:** Ran `warroute coverage probe-wdgowars /api/me`. Got a 404 for `/Program%20Files/Git/api/me`.
+**Correction:** Set `MSYS_NO_PATHCONV=1` per command. Domenic's machines are all Windows + Git Bash, so this comes up.
+**Rule going forward:** When a Unix-style path argument lands in the wrong place on Windows, suspect MSYS path conversion before suspecting the program. README + project CLAUDE.md both mention this. Global memory has a reference entry too.
+**Why:** Wasted ~5 minutes the first time. The error message ("404 Not Found") was indistinguishable from a real wrong-endpoint case until inspecting the request URL.
+
+### 2026-05-11 - Auth-check should use the cheapest available endpoint, not a feature endpoint
+
+**Trigger:** Precheck's WiGLE auth-check called `search_bbox` (a tiny 100m bbox, 1-result limit), figuring it was cheap. On the free tier, the search endpoint hit the network-density index which was variable 15-19s typical and occasionally >60s. The check would `ReadTimeout` on cold-call and report a misleading "verify TLS cert chain" hint. Bumping the timeout to 60s wasn't enough on first runs.
+
+**Correction:** Probe for a purpose-built auth endpoint before reusing a feature endpoint. For WiGLE, `/api/v2/profile/user` returns in 0.5s with the user profile dict — it's the right endpoint for "am I authenticated." Refactored `check_wigle()` to use it.
+
+**Rule going forward:**
+1. For any service's auth-check (precheck, liveness probe, health endpoint), look for an endpoint that returns *only* identity info (`/profile`, `/me`, `/whoami`, `/account`). Don't conflate auth-check with a feature call.
+2. Probe candidate endpoints empirically (one-off `uv run python -c "..."` script with structure-only output) before designing the check. Took ~30s of probing to find `/api/v2/profile/user` once we knew to look.
+3. When wrapping a transport-layer exception (`httpx.RequestError` and friends), always include `type(exc).__name__` in the wrapped message. Empty-message exceptions like `ReadTimeout('')` will otherwise erase the cause and route the user toward misleading hints. There's a regression test for this in `test_wigle_client.py::test_profile_request_error_includes_exception_type`.
+
+**Why:** A 15-60s "auth check" that occasionally times out is worse than no auth check; it lies about the failure mode (suggests TLS / cert chain when reality is a slow backend). Cheap, deterministic, auth-only endpoints are what precheck needs.
+
+---
+
 ### 2026-05-10 - Don't roll a custom scoring formula
 
 **Trigger:** Initial PLAN.md proposed `score = 0.6 * new_to_you + 0.4 * new_territory_cell`.

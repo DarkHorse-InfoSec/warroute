@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Run #{{ run.id }}{% endblock %}
+{% block content %}
+<h1>Run #{{ run.id }}</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Total APs</div>
+    <div class="value">{{ run.total_aps or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="label">New APs</div>
+    <div class="value">+{{ run.new_aps or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="label">WiGLE</div>
+    <div class="value">
+      {% if run.uploaded_wigle_at %}<span class="badge good">uploaded</span>
+      {% else %}<span class="badge bad">no</span>{% endif %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">WDGoWars</div>
+    <div class="value">
+      {% if run.uploaded_wdgowars_at %}<span class="badge good">uploaded</span>
+      {% else %}<span class="badge bad">no</span>{% endif %}
+    </div>
+  </div>
+</div>
+
+<dl class="kv">
+  <dt>Source</dt><dd>{{ run.source }}</dd>
+  <dt>CSV path</dt><dd>{{ run.csv_path }}</dd>
+  <dt>CSV sha256</dt><dd>{{ run.csv_sha256 }}</dd>
+  <dt>Started</dt><dd>{{ run.started_at }}</dd>
+  <dt>Ended</dt><dd>{{ run.ended_at }}</dd>
+  {% if run.distance_km %}<dt>Distance</dt><dd>{{ "%.1f"|format(run.distance_km) }} km</dd>{% endif %}
+  {% if run.points_earned %}<dt>Points</dt><dd>{{ run.points_earned }}</dd>{% endif %}
+  <dt>WDGoWars run id</dt><dd>{{ run.wdgowars_run_id or "-" }}</dd>
+</dl>
+
+{% if related_plan %}
+<h2>Predicted vs actual</h2>
+<table>
+  <thead><tr><th></th><th>Plan #{{ related_plan.id }}</th><th>Actual</th></tr></thead>
+  <tbody>
+    <tr><td>Mode</td><td>{{ related_plan.mode }}</td><td>-</td></tr>
+    <tr><td>Duration (min)</td><td>{{ related_plan.duration_min }}</td><td>{{ related_plan.estimated_drive_min }}</td></tr>
+    <tr><td>New APs</td><td>~{{ related_plan.estimated_new_aps }}</td><td>{{ run.new_aps or 0 }}</td></tr>
+  </tbody>
+</table>
+{% endif %}
+
+<p><a class="btn secondary" href="/">Back to dashboard</a></p>
+{% endblock %}

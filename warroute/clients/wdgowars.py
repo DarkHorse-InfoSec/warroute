@@ -1,13 +1,16 @@
 """WDGoWars API client.
 
-Auth: Bearer token in Authorization header (assumed).
-Known endpoints (from PLAN.md):
-  - GET  /api/me           - player state, daily quota, owned territory
+Auth: `X-API-Key: <token>` header. Confirmed empirically 2026-05-11 against
+Domenic's account; Authorization-header variants (Bearer, raw, Token) all 401.
+
+Known endpoints:
+  - GET  /api/me           - player state (ok, username, country, wifi count, ...)
   - POST /api/upload-csv   - submit a WigleWifi-1.6 CSV
 
-Other endpoints (territory enumeration, per-cell value) are undocumented;
+Response convention: top-level `ok: true|false`. Errors include `error: <msg>`.
+
+Other endpoints (territory enumeration, per-cell value) remain undocumented;
 use `WdgowarsClient.probe(path)` to inspect raw responses and grow the client.
-See DECISIONS.md (2026-05-10 entry).
 """
 
 from __future__ import annotations
@@ -41,15 +44,32 @@ class WdgowarsQuotaError(WdgowarsError):
     """The 20k new-AP-per-24h cap (or any other server-side throttle) was hit."""
 
 
+DAILY_QUOTA_CAP = 20000  # WDGoWars per-account 24h cap on new APs (from PLAN.md)
+
+
 @dataclass
 class PlayerState:
-    """Subset of /api/me we care about. Extra fields preserved in `raw`."""
+    """Subset of /api/me. Extra fields preserved in `raw`.
+
+    Real /api/me does NOT expose owned-cell IDs (only `reinforce` counts per
+    zoom level); owned_cell_ids stays empty until we discover the right
+    endpoint. `daily_quota_remaining` is derived from recent_today vs the
+    documented 20k/24h cap.
+    """
 
     username: str
-    points: int
+    total: int  # total entities discovered (was previously called `points`)
+    wifi: int  # WiFi APs only
+    ble: int  # BLE devices
+    recent_today: int
     daily_quota_remaining: int | None
     owned_cell_ids: list[str]
     raw: dict[str, Any]
+
+    @property
+    def points(self) -> int:
+        """Backwards-compatible alias for callers that still expect `points`."""
+        return self.total
 
 
 class WdgowarsClient:
@@ -73,7 +93,7 @@ class WdgowarsClient:
                 base_url=WDGOWARS_API_BASE,
                 timeout=DEFAULT_TIMEOUT,
                 headers={
-                    "Authorization": f"Bearer {self._token}",
+                    "X-API-Key": self._token,
                     "Accept": "application/json",
                 },
             )
@@ -90,16 +110,16 @@ class WdgowarsClient:
         try:
             resp = await self._client.request(method, path, **kwargs)
         except httpx.RequestError as exc:
-            raise WdgowarsError(f"WDGoWars request to {path} failed: {exc}") from exc
+            raise WdgowarsError(
+                f"WDGoWars request to {path} failed ({type(exc).__name__}): {exc}"
+            ) from exc
 
         if resp.status_code in (401, 403):
             raise WdgowarsAuthError(f"WDGoWars rejected token at {path} ({resp.status_code})")
         if resp.status_code == 429:
             raise WdgowarsQuotaError(f"WDGoWars rate-limit/quota at {path}")
         if resp.status_code >= 400:
-            raise WdgowarsError(
-                f"WDGoWars HTTP {resp.status_code} at {path}: {resp.text[:200]}"
-            )
+            raise WdgowarsError(f"WDGoWars HTTP {resp.status_code} at {path}: {resp.text[:200]}")
         return resp
 
     async def me(self) -> PlayerState:
@@ -110,18 +130,25 @@ class WdgowarsClient:
         except ValueError as exc:
             raise WdgowarsError(f"/api/me returned non-JSON: {resp.text[:200]}") from exc
 
+        total = _int_or_none(_first_present(payload, "total", "points", "score")) or 0
+        wifi = _int_or_none(_first_present(payload, "wifi")) or 0
+        ble = _int_or_none(_first_present(payload, "ble")) or 0
+        recent_today = _int_or_none(_first_present(payload, "recent_today")) or 0
+        explicit_remaining = _int_or_none(
+            _first_present(payload, "daily_quota_remaining", "daily_remaining", "quota_remaining")
+        )
+        derived_remaining = max(DAILY_QUOTA_CAP - recent_today, 0)
         return PlayerState(
-            username=str(payload.get("username") or payload.get("name") or ""),
-            points=int(payload.get("points") or payload.get("score") or 0),
-            daily_quota_remaining=_int_or_none(
-                payload.get("daily_quota_remaining")
-                or payload.get("daily_remaining")
-                or payload.get("quota_remaining")
+            username=str(_first_present(payload, "username", "name") or ""),
+            total=total,
+            wifi=wifi,
+            ble=ble,
+            recent_today=recent_today,
+            daily_quota_remaining=(
+                explicit_remaining if explicit_remaining is not None else derived_remaining
             ),
             owned_cell_ids=_strings_or_empty(
-                payload.get("owned_cells")
-                or payload.get("territory")
-                or payload.get("cells")
+                _first_present(payload, "owned_cells", "territory", "cells")
             ),
             raw=payload,
         )
@@ -165,3 +192,11 @@ def _strings_or_empty(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(v) for v in value if v is not None]
+
+
+def _first_present(payload: dict[str, Any], *keys: str) -> Any:
+    """Return the first value in payload whose key is present (even if value is 0/False/'')."""
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None
