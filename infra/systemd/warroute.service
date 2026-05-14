@@ -20,6 +20,12 @@ Environment=DATABASE_URL=sqlite:////var/lib/warroute/warroute.db
 Environment=SPOOL_DIR=/var/spool/warroute/in
 Environment=GPX_OUT_DIR=/var/lib/warroute/gpx
 
+# ProtectHome=read-only blocks ~/.cache, so point uv + HOME at a writable
+# path inside the ReadWritePaths list. Without this, uv crash-loops on
+# "Could not acquire lock: Read-only file system" at /home/warroute/.cache/uv.
+Environment=HOME=/home/warroute/warroute
+Environment=UV_CACHE_DIR=/home/warroute/warroute/.uv-cache
+
 # Bind to localhost only; Caddy fronts TLS + basic-auth.
 ExecStart=/usr/local/bin/uv run --project /home/warroute/warroute warroute serve --host 127.0.0.1 --port 8000
 Restart=on-failure

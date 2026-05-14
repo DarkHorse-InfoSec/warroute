@@ -70,9 +70,16 @@ fi
 if ! command -v uv >/dev/null 2>&1; then
     echo "==> installing uv (Astral)"
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    # uv installs to /root/.local/bin by default when running as root; symlink for system-wide use
+    # uv installs to /root/.local/bin by default when running as root, but /root is
+    # mode 700, so a symlink would fail for non-root users (e.g. the warroute user).
+    # Copy the binary into /usr/local/bin so it is world-executable.
     if [[ -x /root/.local/bin/uv ]]; then
-        ln -sf /root/.local/bin/uv /usr/local/bin/uv
+        cp /root/.local/bin/uv /usr/local/bin/uv
+        chmod 755 /usr/local/bin/uv
+    fi
+    if [[ -x /root/.local/bin/uvx ]]; then
+        cp /root/.local/bin/uvx /usr/local/bin/uvx
+        chmod 755 /usr/local/bin/uvx
     fi
 else
     echo "==> uv already installed: $(uv --version)"
