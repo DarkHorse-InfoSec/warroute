@@ -2,6 +2,25 @@
 
 Current phase: **v1 deployed to Hetzner prod (2026-05-14).** All five PLAN.md phases shipped + post-v1 code (precheck, infra artifacts) + Hetzner deploy executed. `https://warroute.darkhorseinfosec.com` is live, LE-cert-signed, basic-auth-gated. Next: open up to testers, then in-car drive verification, then public release.
 
+### Session 2026-05-14 (PM, home MSI) outcome
+
+PR #5 (geocoding + planner UX, 10 commits) resolved locally as fast-forwards. All branches now at `951435b` (the deployed prod tip):
+
+- `main` fast-forwarded from `d9879c3` -> `951435b` (+22 commits: phases 1/3/4/5, precheck, deploy artifacts, geocoding stack, planner UX, deploy fixes, tester basic_auth).
+- `feature/phase-4-web-ui` fast-forwarded from `4362bf5` -> `951435b` (+10 commits: geocoding + planner UX + deploy fixes + tester scripts).
+- `feature/geocoding` already at `951435b` (no-op).
+- Verified green pre-merge: 188 tests pass, ruff clean, mypy clean (34 source files).
+
+**Remote dead.** `origin` (`https://github.com/DarkHorse-InfoSec/warroute.git`) returns 404 from both `HackingPain` and `DarkHorse-InfoSec` accounts. The repo was reachable for the 2026-05-12 PR #5 push but has since vanished (deleted? renamed? transferred?). Local repo is intact; push is blocked until a new remote is set up. Decisions needed:
+- New repo owner: `HackingPain` (personal, matches `D:\Projects\Open-Source\` path) vs `darkhorse-infosec` org.
+- Visibility: public (open-source) vs private.
+- Name: `warroute` (matches deployed hostname + code) vs `wardriving-map` (matches local dir + PROJECT_INDEX).
+
+Notes / caveats from the consolidation:
+- Local `.venv` got rebuilt against Python 3.14 (the cached 3.13 interpreter was missing) — `uv sync --all-extras` reinstalled cleanly.
+- 20 deprecation warnings on `datetime.utcnow()` from Python 3.14 in `gpx.py`, `orchestrator.py`, `planner.py`. Not blocking, but worth a cleanup pass to `datetime.now(datetime.UTC)`.
+- Stale feature branches now redundant: `feature/phase-1-uploader`, `feature/phase-2-coverage`, `feature/phase-3-route-planner` all sit on commits that are reachable from main. Safe to delete locally + remotely (once we have a remote again).
+
 ### Session 2026-05-14 (AM, home MSI) outcome
 
 Hetzner deploy executed end-to-end against `5.161.250.8`. App live at `https://warroute.darkhorseinfosec.com` behind LE cert + Caddy basic_auth (user `domenic`, password at `/root/warroute-admin-password.txt` on the box, mode 600). Migration `_v1.sql` applied. Hetzner Cloud Firewall confirmed passing 80/443. Two real infra footguns surfaced during deploy and fixed in repo (commit `ff599cc`):
