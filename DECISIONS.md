@@ -5,6 +5,32 @@ Append-only. Newest at top.
 
 ---
 
+## 2026-05-14 - Tester access via multi-user Caddy basic_auth (no app changes)
+
+**Question:** WarRoute is deployed at `https://warroute.darkhorseinfosec.com` behind Caddy basic_auth with a single user (`domenic`). To validate the app before public release, we need to give a small number of testers their own credentials. PLAN.md §9 explicitly forbids login forms, JWTs, and session management ("Single-tenant. No login, no JWT, no session management. HTTP basic auth at the Caddy layer. Don't add a user model."). Does adding testers violate that constraint?
+
+**Resolution:** No, as long as auth stays at the edge. Add additional basic_auth lines to the Caddyfile, one per tester. The app itself remains auth-unaware. The "single-tenant" constraint is about app state (no per-user data partitioning, no profile pages, no role checks in code) — not about how many people can authenticate to the reverse proxy.
+
+**v0 contract:**
+- Caddyfile `basic_auth {}` block holds N lines, one per identity.
+- Tester onboarding via `infra/add-tester.sh <username>` on the box: generates a 24-char `secrets.token_urlsafe(18)` password, bcrypts via `caddy hash-password`, appends to `/etc/caddy/Caddyfile`, validates, reloads Caddy. Plaintext saved to `/etc/warroute/tester-passwords/<username>.txt` (mode 600, root-only) for retrieval.
+- Revocation: delete the user's line from `/etc/caddy/Caddyfile` + `systemctl reload caddy`. Plaintext file at `/etc/warroute/tester-passwords/<username>.txt` is `rm`'d at the same time.
+- Tester URL, username, and password delivered out-of-band (Signal/Slack DM); never in chat or commit.
+
+**Why this and not the alternatives:**
+- **Cloudflare Access (Zero Trust):** Considered. Free tier handles up to 50 users with Google/email SSO at the edge. Cleaner UX for testers (no shared-password ergonomics, real per-user audit logs). But requires turning on the Cloudflare orange-cloud proxy (changes TLS architecture; CF terminates TLS and re-issues to origin), setting up the CF Access app, and re-running our Let's Encrypt cert dance. Defer until tester count exceeds ~5 or per-user audit becomes a real requirement.
+- **Tailscale:** Zero public exposure, magic-DNS hostnames, no app changes. But testers must install Tailscale and accept an invite — friction we don't want for casual testers, and incompatible with the "tester opens the URL on their phone" workflow.
+- **Token-in-URL signed links:** Heaviest. Requires app code (verify, log, expire). Out of spec with "no JWT, no session." Rejected.
+
+**Limits this approach hits before we need to upgrade:**
+- No per-user audit: Caddy logs username on each request, but if a password leaks we can't tell *which user's session* that was without further correlation (multiple devices per tester, etc.). Acceptable for ~5 testers and a beta phase; not acceptable at scale.
+- Password rotation is manual (delete + re-add).
+- One leaked password = one revoke (single user), not a fleet-wide rotation. That's fine.
+
+**Promotion path:** When we move from beta to public release, this all gets ripped out. Public release likely means either (a) opening Caddy without basic_auth and accepting "anyone can see the planner" (since there's no per-user state to leak), or (b) Cloudflare Access if we want analytics on who's using it. That's a future-Domenic decision; not in scope here.
+
+---
+
 ## 2026-05-11 (PM, MSI home) - WDGoWars 1.3.0 API surface mapped; per-cell ownership not exposed
 
 **Question:** Find the WDGoWars territory-enumeration endpoint so `cells.wdgowars_owner` can be populated. Open from the 2026-05-11 morning DECISIONS entry; candidates queued were `/api/territory`, `/api/cells`, `/api/gang/{id}`, `/api/reinforce`.

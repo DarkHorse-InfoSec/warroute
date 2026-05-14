@@ -8,9 +8,15 @@
 
 warroute.darkhorseinfosec.com {
     # ----- Basic auth -----
-    # Generate the hash with:
+    # Initial operator account. Generate the hash with:
     #   caddy hash-password --plaintext '<YOUR_PASSWORD>'
     # Paste the bcrypt hash (the long $2a$... string) below.
+    #
+    # Tester accounts (beta phase) are added/removed via:
+    #   infra/add-tester.sh <username>
+    #   infra/remove-tester.sh <username>
+    # which append/strip lines inside this block and reload Caddy.
+    # See DECISIONS.md 2026-05-14 for the multi-user-basic-auth rationale.
     basic_auth {
         domenic REPLACE_WITH_BCRYPT_HASH_FROM_CADDY_HASH_PASSWORD
     }

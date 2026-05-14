@@ -1,6 +1,37 @@
 # WarRoute - Active TODO
 
-Current phase: **v1 code-complete + live-verified on home network.** All five PLAN.md phases shipped, plus post-v1 code (precheck, infra artifacts). WDGoWars territory-enumeration question is now answered (definitive: not exposed by the API). Remaining live-execution work: ORS key, in-car drive verification, Hetzner deploy.
+Current phase: **v1 deployed to Hetzner prod (2026-05-14).** All five PLAN.md phases shipped + post-v1 code (precheck, infra artifacts) + Hetzner deploy executed. `https://warroute.darkhorseinfosec.com` is live, LE-cert-signed, basic-auth-gated. Next: open up to testers, then in-car drive verification, then public release.
+
+### Session 2026-05-14 (AM, home MSI) outcome
+
+Hetzner deploy executed end-to-end against `5.161.250.8`. App live at `https://warroute.darkhorseinfosec.com` behind LE cert + Caddy basic_auth (user `domenic`, password at `/root/warroute-admin-password.txt` on the box, mode 600). Migration `_v1.sql` applied. Hetzner Cloud Firewall confirmed passing 80/443. Two real infra footguns surfaced during deploy and fixed in repo (commit `ff599cc`):
+
+- `infra/bootstrap.sh` symlinked uv into `/usr/local/bin` from `/root/.local/bin`, but `/root` is mode 700 so non-root users couldn't traverse the symlink. Switched to `cp`.
+- `infra/systemd/warroute.service` had `ProtectHome=read-only` blocking `~/.cache/uv` lock acquisition. Added `HOME=/home/warroute/warroute` + `UV_CACHE_DIR=/home/warroute/warroute/.uv-cache` overrides.
+
+Plus a DNS gotcha worth permanent recording: `darkhorseinfosec.com` is delegated to **Cloudflare**, not Squarespace, despite Squarespace having a DNS panel for it. Adding records in Squarespace is a no-op. See `memory/reference_dns_authoritative_cloudflare.md`.
+
+### Deploy follow-ups (open)
+
+- [ ] Delete the stale `warroute → 5.161.250.8` A record in the Squarespace DNS panel (no-op, but confusing future-you).
+- [ ] Add SSH alias to `~/.ssh/config`:
+      ```
+      Host warroute
+        HostName 5.161.250.8
+        User root
+        IdentityFile D:/Projects/.ssh/hetzner-warroute
+        IdentitiesOnly yes
+      ```
+- [ ] Rotate the Cloudflare API token at `D:/Projects/.ssh/cloudflare_api_token.txt` (expired 2026-05-11). Use scope: Zone:DNS:Edit on `darkhorseinfosec.com`.
+- [ ] Add a daily SQLite backup cron per `infra/README.md §9` (`sqlite3 /var/lib/warroute/warroute.db ".backup ..."` with 30-day retention). Not urgent until the DB has real data.
+
+### Tester access (before public release)
+
+- [x] **Decide auth model for tester access.** Picked multi-user basic_auth at the Caddy edge — preserves PLAN.md §9 single-tenant constraint (app stays auth-unaware). See `DECISIONS.md` 2026-05-14 entry. Alternatives (Cloudflare Access, Tailscale, signed URL tokens) documented there with rejection reasoning.
+- [x] **Implement.** `infra/add-tester.sh` + `infra/remove-tester.sh` shipped (validates input, bcrypts via `caddy hash-password`, validates Caddyfile before installing, reloads Caddy on success). Installed to `/usr/local/sbin/warroute-add-tester` and `warroute-remove-tester` on the live box. Passwords land at `/etc/warroute/tester-passwords/<user>.txt` mode 600.
+- [ ] Deliver credentials to first round of testers (out-of-band, Signal/Slack DM — never in chat or commit). Run `warroute-add-tester <name>` per tester; `cat /etc/warroute/tester-passwords/<name>.txt` to retrieve.
+- [ ] Define exit criteria for promoting to public release (e.g., N testers completed M plans, zero critical issues, performance under concurrent load).
+- [ ] Decide on public-release auth posture (drop basic_auth entirely vs Cloudflare Access). Defer until tester-phase signal is in.
 
 ### Session 2026-05-11 (AM, school PC) outcome
 
@@ -131,7 +162,7 @@ Clean network (cert-chain pre-verified Let's Encrypt for all three API hosts). U
 - [x] `infra/systemd/warroute.service` - systemd unit with hardening (NoNewPrivileges, ProtectSystem=strict, ReadWritePaths scoped to /var/lib/warroute + /var/spool/warroute + /home/warroute/warroute, MemoryDenyWriteExecute, RestrictAddressFamilies, etc.). EnvironmentFile=/etc/warroute/warroute.env
 - [x] `infra/Caddyfile` - TLS auto via Let's Encrypt + basic_auth + reverse_proxy 127.0.0.1:8000 + HSTS/CSP/X-Frame-Options headers + JSON access log
 - [x] `infra/README.md` - 10-section runbook: pre-flight (DNS, SSH, snapshot), bootstrap, ufw setup, repo clone, secrets at /etc/warroute/warroute.env, Caddy password generation, systemd enable, external verification, Syncthing pointer, rollback, ops notes
-- [ ] EXECUTE: actual deployment to 5.161.250.8 (deferred; Domenic's go-ahead required + must be on clean network per Fortinet finding)
+- [x] EXECUTE: actual deployment to 5.161.250.8 (2026-05-14, home MSI clean network). App live at `https://warroute.darkhorseinfosec.com` with LE cert + Caddy basic_auth. Two infra fixes landed (commit `ff599cc`). DNS at Cloudflare, not Squarespace.
 
 ## Pre-drive sanity harness (DONE, code shipped; live execution parked)
 

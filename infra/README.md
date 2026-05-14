@@ -149,6 +149,35 @@ Then open `https://warroute.darkhorseinfosec.com` in a browser, authenticate, co
 
 ---
 
+## 7a. Add tester accounts (beta phase)
+
+Multi-user basic_auth at the Caddy edge (PLAN.md §9 single-tenant constraint is preserved; the app stays auth-unaware). See `DECISIONS.md` 2026-05-14 for the architectural reasoning.
+
+```bash
+# Install the helpers once (already present after a full repo clone to /home/warroute/warroute):
+install -m 755 /home/warroute/warroute/infra/add-tester.sh /usr/local/sbin/warroute-add-tester
+install -m 755 /home/warroute/warroute/infra/remove-tester.sh /usr/local/sbin/warroute-remove-tester
+
+# Add a tester:
+warroute-add-tester alice
+# -> generates password, bcrypts, appends to /etc/caddy/Caddyfile, reloads Caddy.
+# -> prints the URL + username; password file path: /etc/warroute/tester-passwords/alice.txt (mode 600)
+
+# Retrieve a tester's password to deliver out-of-band (Signal/Slack DM; NEVER in chat):
+cat /etc/warroute/tester-passwords/alice.txt
+
+# Revoke a tester:
+warroute-remove-tester alice
+# -> strips the line from Caddyfile, deletes the plaintext file, reloads Caddy.
+
+# Rotate a tester's password:
+warroute-remove-tester alice && warroute-add-tester alice
+```
+
+The operator account `domenic` is protected: `remove-tester.sh` refuses to delete it. To rotate `domenic`'s password, edit `/etc/caddy/Caddyfile` manually with a hash from `caddy hash-password`, then `systemctl reload caddy`.
+
+---
+
 ## 8. Phone-to-VPS CSV sync (Syncthing, separate runbook)
 
 PLAN.md section 6.1 specifies Syncthing as the phone-to-VPS CSV sync mechanism. Setting up Syncthing on both the Pixel phone and the Hetzner VPS is out of scope for this runbook. Once Syncthing is paired and the WiGLE-export folder syncs to `/var/spool/warroute/in/`, the `warroute watch` daemon (a separate systemd unit, TBD) will pick up new CSVs and trigger the dual-upload pipeline.
