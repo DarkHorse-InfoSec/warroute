@@ -24,6 +24,7 @@ from warroute.router.gpx import google_maps_url, write_gpx
 from warroute.router.planner import (
     PlannerError,
     PlanRequest,
+    Stop,
     persist_direct_route,
 )
 from warroute.router.planner import plan as run_plan
@@ -148,13 +149,18 @@ async def post_plan(
                 ),
             )
 
+    stops_for_request: list[Stop] = []
+    if mode == "oneway" and dest_lat is not None and dest_lon is not None:
+        stops_for_request.append(
+            Stop(lat=dest_lat, lon=dest_lon, label=resolved_destination_label)
+        )
+
     req = PlanRequest(
         home_lat=start_lat,
         home_lon=start_lon,
         duration_min=duration_min,
         mode=mode,
-        destination_lat=dest_lat,
-        destination_lon=dest_lon,
+        stops=stops_for_request,
         direct_min=None,  # populated below after the direct-route precheck
     )
 

@@ -18,6 +18,7 @@ from warroute.router.planner import (
     DEFAULT_AVG_SPEED_KMH,
     PlannerError,
     PlanRequest,
+    Stop,
     plan,
 )
 
@@ -44,8 +45,7 @@ def test_plan_request_reachable_radius_for_oneway() -> None:
         home_lon=-72.21,
         duration_min=60,
         mode="oneway",
-        destination_lat=45.0,
-        destination_lon=-72.0,
+        stops=[Stop(lat=45.0, lon=-72.0)],
     )
     assert req.reachable_radius_km() == pytest.approx(DEFAULT_AVG_SPEED_KMH)
 
@@ -57,8 +57,7 @@ def test_plan_request_detour_budget_oneway_with_direct_min() -> None:
         home_lon=-72.21,
         duration_min=30,
         mode="oneway",
-        destination_lat=44.95,
-        destination_lon=-72.17,
+        stops=[Stop(lat=44.95, lon=-72.17)],
         direct_min=6.0,
     )
     assert req.detour_budget_min() == pytest.approx(24.0)
@@ -289,6 +288,134 @@ async def test_plan_raises_when_back_off_exhausts_candidates() -> None:
     req = PlanRequest(home_lat=44.9367, home_lon=-72.2051, duration_min=90, mode="loop")
     with pytest.raises(PlannerError, match="Could not fit"):
         await plan(req)
+
+
+@respx.mock
+async def test_multistop_routes_each_segment_separately() -> None:
+    """3 stops -> 4 segments (home->s1, s1->s2, s2->s3, s3->home for loop mode).
+
+    Each segment runs its own ORS /optimization call; the planner aggregates.
+    """
+    run_migrations()
+    _seed_scored_grid(44.94, -72.21, radius_km=8)
+
+    # Each segment's /optimization mock returns a routable plan. Use a side_effect
+    # list so respx feeds them in order.
+    optimization_response = {
+        "routes": [
+            {
+                "vehicle": 1,
+                "duration": 600,  # 10 min/segment, fits 25-min/segment budget
+                "distance": 5000,
+                "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+            }
+        ]
+    }
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(200, json=optimization_response)
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 2400}, "geometry": None}]},
+        )
+    )
+
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=120,
+        mode="loop",
+        stops=[
+            Stop(lat=44.95, lon=-72.20, label="Daycare", dwell_min=5),
+            Stop(lat=44.96, lon=-72.19, label="Work", dwell_min=0),
+            Stop(lat=44.97, lon=-72.18, label="Coffee", dwell_min=10),
+        ],
+    )
+    result = await plan(req)
+
+    assert result.planned_route_id is not None
+    assert result.request.is_multistop
+    # All 3 user-specified stops appear in the ordered waypoints (labels match).
+    labels = [w.label for w in result.ordered_waypoints]
+    assert "Daycare" in labels
+    assert "Work" in labels
+    assert "Coffee" in labels
+    # Persisted with stops_json populated.
+    with transaction() as conn:
+        row = conn.execute(
+            "SELECT stops_json, mode FROM planned_routes WHERE id = ?",
+            (result.planned_route_id,),
+        ).fetchone()
+    assert row["mode"] == "loop"
+    import json
+
+    persisted = json.loads(row["stops_json"])
+    assert len(persisted) == 3
+    assert persisted[0]["label"] == "Daycare"
+    assert persisted[0]["dwell_min"] == 5
+
+
+@respx.mock
+async def test_multistop_falls_back_to_direct_segment_when_no_cells_fit() -> None:
+    """A segment that can't fit any cells (budget too tight) still drives the leg
+    directly via /directions; planner doesn't hard-fail."""
+    run_migrations()
+
+    # Always over-budget optimization -> back-off exhausts -> per-segment falls
+    # through to /directions
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 999999,
+                        "distance": 999999,
+                        "steps": [{"type": "job", "job": 0}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 4000, "duration": 480}, "geometry": None}]},
+        )
+    )
+
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=30,
+        mode="oneway",
+        stops=[
+            Stop(lat=44.95, lon=-72.20, label="Stop A"),
+            Stop(lat=44.96, lon=-72.19, label="Stop B"),
+        ],
+    )
+    result = await plan(req)
+    assert result.planned_route_id is not None
+    # Got a route even with no cells fitting per-segment.
+    assert "Stop A" in [w.label for w in result.ordered_waypoints]
+    assert "Stop B" in [w.label for w in result.ordered_waypoints]
+
+
+def test_plan_request_total_dwell_min_sums_stops() -> None:
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="oneway",
+        stops=[
+            Stop(lat=44.95, lon=-72.20, dwell_min=5),
+            Stop(lat=44.96, lon=-72.19, dwell_min=15),
+        ],
+    )
+    assert req.total_dwell_min() == 20
+    assert req.is_multistop is True
 
 
 @respx.mock

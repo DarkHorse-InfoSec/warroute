@@ -21,15 +21,22 @@ def test_settings_load(settings: Settings) -> None:
 
 def test_migrations_create_tables() -> None:
     version = run_migrations()
-    assert version == 1
+    assert version == 2
 
     with transaction() as conn:
-        assert current_version(conn) == 1
+        assert current_version(conn) == 2
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
         names = {row["name"] for row in rows}
-        for required in ("sessions", "observations", "cells", "planned_routes", "schema_version"):
+        for required in (
+            "sessions",
+            "observations",
+            "cells",
+            "planned_routes",
+            "scheduled_departures",
+            "schema_version",
+        ):
             assert required in names, f"missing table: {required}"
 
 
@@ -37,7 +44,7 @@ def test_migrations_idempotent() -> None:
     run_migrations()
     with transaction() as conn:
         # second run must not duplicate the schema_version row or error
-        assert current_version(conn) == 1
+        assert current_version(conn) == 2
 
 
 def test_cli_doctor_passes_when_env_present() -> None:
@@ -77,7 +84,7 @@ def test_sqlite_wal_mode_enabled() -> None:
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (99,))
     with transaction() as conn:
         rows = conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall()
-        assert {row["version"] for row in rows} == {1, 99}
+        assert {row["version"] for row in rows} == {1, 2, 99}
 
 
 def test_db_isolated_per_test() -> None:
