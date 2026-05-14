@@ -16,7 +16,7 @@ import asyncio
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from warroute.clients.ntfy import NtfyClient
@@ -180,7 +180,7 @@ def _record_session(
     wigle: WigleUploadResult | str | None,
     wdg: WdgowarsUploadResult | str | None,
 ) -> int:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(UTC).replace(tzinfo=None).isoformat()
     wigle_at = now if isinstance(wigle, WigleUploadResult) and wigle.success else None
     wdg_at = now if isinstance(wdg, WdgowarsUploadResult) and wdg.success else None
     wdg_run = (
