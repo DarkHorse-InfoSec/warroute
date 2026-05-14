@@ -64,6 +64,31 @@
 </div>
 {% endif %}
 
+{% if request_data.stops and request_data.stops|length > 1 %}
+<h2>Stops</h2>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Stop</th>
+      <th>Dwell</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in request_data.stops %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>
+        {% if s.label %}<strong>{{ s.label }}</strong><br/>{% endif %}
+        <span class="muted">{{ "%.5f"|format(s.lat) }}, {{ "%.5f"|format(s.lon) }}</span>
+      </td>
+      <td>{% if s.dwell_min %}{{ s.dwell_min }} min{% else %}<span class="muted">-</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <div id="map" data-waypoints='{{ waypoints_geojson|tojson }}'
      {% if route_geometry %}data-geometry='{{ route_geometry|tojson }}'{% endif %}
      data-home-lat="{{ request_data.home_lat }}" data-home-lon="{{ request_data.home_lon }}"></div>

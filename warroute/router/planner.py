@@ -54,16 +54,63 @@ class PlannerError(RuntimeError):
         self.last_attempted_min = last_attempted_min
 
 
+@dataclass(frozen=True)
+class Stop:
+    """A user-specified intermediate destination on a multi-stop route.
+
+    `dwell_min` is "how long the user is parked here" (e.g. dropping off a kid
+    takes 5 minutes). It counts against the duration budget but the planner
+    doesn't add any cells for it - just subtracts the time.
+
+    `overnight_after` reserved for Phase 6c roadtrip mode (split route into days
+    after this stop). Ignored in 6a.
+    """
+
+    lat: float
+    lon: float
+    label: str | None = None
+    dwell_min: int = 0
+    overnight_after: bool = False
+
+
 @dataclass
 class PlanRequest:
     home_lat: float
     home_lon: float
     duration_min: int
     mode: str = "loop"  # 'loop' | 'oneway'
-    destination_lat: float | None = None
-    destination_lon: float | None = None
+    stops: list[Stop] = field(default_factory=list)
     avg_speed_kmh: float = DEFAULT_AVG_SPEED_KMH
     direct_min: float | None = None  # T_direct in min (oneway only); enables corridor filter
+
+    @property
+    def destination_lat(self) -> float | None:
+        """Back-compat alias: the last stop is the canonical destination."""
+        return self.stops[-1].lat if self.stops else None
+
+    @property
+    def destination_lon(self) -> float | None:
+        return self.stops[-1].lon if self.stops else None
+
+    @property
+    def is_multistop(self) -> bool:
+        """True if this request needs per-segment routing.
+
+        Per-segment routing kicks in for:
+          - loop mode + 1 or more stops (home -> stops... -> home is 2+ segments)
+          - oneway mode + 2 or more stops (home -> stops... -> last is 2+ segments)
+
+        Single-stop oneway (home -> destination) is a single segment - the
+        existing `plan()` path handles it.
+        """
+        if not self.stops:
+            return False
+        if self.mode == "loop":
+            return True
+        return len(self.stops) > 1
+
+    def total_dwell_min(self) -> int:
+        return sum(s.dwell_min for s in self.stops)
 
     def reachable_radius_km(self) -> float:
         """Half the time-budget for loops (you have to come back); full for one-way."""
@@ -76,7 +123,7 @@ class PlanRequest:
         """Minutes left over for AP-scanning detours after the direct drive (oneway)."""
         if self.mode != "oneway" or self.direct_min is None:
             return float(self.duration_min)
-        return max(0.0, self.duration_min - self.direct_min)
+        return max(0.0, self.duration_min - self.direct_min - self.total_dwell_min())
 
     def corridor_half_width_km(self) -> float:
         """Max distance from the home->destination line for a cell to be a viable candidate.
@@ -91,9 +138,10 @@ class PlanRequest:
     def end_waypoint(self) -> Waypoint:
         if self.mode == "loop":
             return Waypoint(self.home_lat, self.home_lon, label="Home")
-        if self.destination_lat is None or self.destination_lon is None:
-            raise PlannerError("oneway mode requires destination_lat + destination_lon")
-        return Waypoint(self.destination_lat, self.destination_lon, label="Destination")
+        if not self.stops:
+            raise PlannerError("oneway mode requires at least one stop")
+        last = self.stops[-1]
+        return Waypoint(last.lat, last.lon, label=last.label or "Destination")
 
 
 @dataclass
@@ -115,7 +163,13 @@ class PlanResult:
 
 
 async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult:
-    """End-to-end plan. Reads cells from DB, calls ORS, persists planned_routes row."""
+    """End-to-end plan. Reads cells from DB, calls ORS, persists planned_routes row.
+
+    For multi-stop requests (`request.is_multistop`), routing is delegated to
+    `_plan_multistop` which runs ORS optimization per segment.
+    """
+    if request.is_multistop:
+        return await _plan_multistop(request, attach_geometry)
     candidates = _candidate_cells(request)
     auto_painted = 0
     if not candidates:
@@ -331,6 +385,137 @@ async def _solve_with_backoff(
     )
 
 
+async def _plan_multistop(
+    request: PlanRequest, attach_geometry: bool = True
+) -> PlanResult:
+    """Multi-leg plan: route each consecutive (start, stop) pair as its own segment.
+
+    Each segment runs its own candidate selection + ORS optimization, with back-off
+    if the segment overshoots its share of the time budget. The aggregated route is
+    home -> stop[0] (with cells in between) -> stop[1] (with cells) -> ... -> end,
+    where end = home (loop mode) or stops[-1] (oneway).
+
+    v1 simplifications:
+      - Per-segment budget is an even split of (duration_min - total_dwell_min).
+      - No corridor filter per segment (uses plain reachable radius from segment start).
+        The back-off picks cells along the actual ORS-optimized path; off-route picks
+        get dropped on over-budget. Corridor filter per-segment can be added later if
+        rural multi-stop plans drift too far off-path.
+      - One final ORS /directions call on the full waypoint chain gives accurate
+        total distance + geometry. Per-segment durations are summed as a fallback.
+    """
+    home = Waypoint(request.home_lat, request.home_lon, label="Home")
+
+    segments: list[tuple[Waypoint, Waypoint]] = []
+    cursor = home
+    for i, stop in enumerate(request.stops):
+        stop_wp = Waypoint(stop.lat, stop.lon, label=stop.label or f"Stop {i + 1}")
+        segments.append((cursor, stop_wp))
+        cursor = stop_wp
+    if request.mode == "loop":
+        segments.append((cursor, home))
+
+    total_dwell = request.total_dwell_min()
+    avail_min = max(request.duration_min - total_dwell, len(segments))
+    per_seg_min = max(avail_min // len(segments), 5)
+
+    all_chosen: list[CellScore] = []
+    all_waypoints: list[Waypoint] = [home]
+    all_drops: list[str] = []
+    total_duration_s = 0.0
+    total_distance_m = 0.0
+    auto_painted_total = 0
+
+    async with OrsClient() as ors:
+        for i, (seg_start, seg_end) in enumerate(segments):
+            sub_req = PlanRequest(
+                home_lat=seg_start.lat,
+                home_lon=seg_start.lon,
+                duration_min=per_seg_min,
+                mode="oneway",
+                stops=[Stop(lat=seg_end.lat, lon=seg_end.lon, label=seg_end.label)],
+            )
+            seg_cands = _candidate_cells(sub_req)
+            if not seg_cands:
+                auto_painted_total += _paint_grid_for_request(sub_req)
+                seg_cands = _candidate_cells(sub_req)
+
+            seg_chosen: list[CellScore] = []
+            seg_leg: RouteLeg
+            if seg_cands:
+                est_initial = max(
+                    MIN_WAYPOINTS, min(MAX_OPTIMIZATION_JOBS, per_seg_min // 8)
+                )
+                seg_chosen_init = seg_cands[:est_initial]
+                try:
+                    seg_leg, seg_chosen = await _solve_with_backoff(
+                        ors, seg_start, seg_end, seg_chosen_init, sub_req, all_drops
+                    )
+                except PlannerError as exc:
+                    logger.info(
+                        "Segment %d (%s -> %s): no plan fits, using direct: %s",
+                        i + 1,
+                        seg_start.label,
+                        seg_end.label,
+                        exc,
+                    )
+                    seg_leg = await ors.directions(
+                        [seg_start, seg_end], with_geometry=False
+                    )
+                    seg_chosen = []
+            else:
+                seg_leg = await ors.directions([seg_start, seg_end], with_geometry=False)
+
+            all_chosen.extend(seg_chosen)
+            all_waypoints.extend(
+                Waypoint(c.center_lat, c.center_lon, label=f"Cell {c.cell_id}")
+                for c in seg_chosen
+            )
+            all_waypoints.append(seg_end)
+            total_duration_s += seg_leg.duration_s
+            total_distance_m += seg_leg.distance_m
+
+        total_duration_s += total_dwell * 60
+
+        geometry = None
+        if attach_geometry and len(all_waypoints) >= 2:
+            try:
+                full_leg = await ors.directions(all_waypoints, with_geometry=True)
+                geometry = full_leg.geometry
+                total_duration_s = full_leg.duration_s + total_dwell * 60
+                total_distance_m = full_leg.distance_m
+            except OrsError as exc:
+                logger.warning(
+                    "Full-chain directions failed; using per-segment sums: %s", exc
+                )
+
+    aggregate_leg = RouteLeg(
+        distance_m=total_distance_m,
+        duration_s=total_duration_s,
+        geometry=geometry,
+        waypoint_order=list(range(len(all_chosen))),
+        raw={"multistop_segments": len(segments)},
+    )
+
+    estimated_new_aps = sum(c.estimated_aps for c in all_chosen if c.ownership != "me")
+    synthetic = bool(all_chosen) and all(not c.probed for c in all_chosen)
+
+    plan_id = _persist_plan(request, all_waypoints, aggregate_leg, estimated_new_aps)
+
+    return PlanResult(
+        request=request,
+        chosen_cells=all_chosen,
+        ordered_waypoints=all_waypoints,
+        leg=aggregate_leg,
+        geometry=geometry,
+        estimated_new_aps=estimated_new_aps,
+        planned_route_id=plan_id,
+        drops_for_slack=all_drops,
+        synthetic_density=synthetic,
+        auto_painted_cells=auto_painted_total,
+    )
+
+
 def persist_direct_route(request: PlanRequest, direct_leg: RouteLeg) -> PlanResult:
     """Build a 0-cell PlanResult that's just the direct drive home -> destination.
 
@@ -365,14 +550,30 @@ def _persist_plan(
     import json
 
     payload = json.dumps([{"lat": w.lat, "lon": w.lon, "label": w.label} for w in waypoints])
+    stops_payload = (
+        json.dumps(
+            [
+                {
+                    "lat": s.lat,
+                    "lon": s.lon,
+                    "label": s.label,
+                    "dwell_min": s.dwell_min,
+                    "overnight_after": s.overnight_after,
+                }
+                for s in request.stops
+            ]
+        )
+        if request.stops
+        else None
+    )
     with transaction() as conn:
         cursor = conn.execute(
             """
             INSERT INTO planned_routes (
                 created_at, home_lat, home_lon, duration_min, mode,
                 destination_lat, destination_lon, waypoints_json,
-                estimated_new_aps, estimated_drive_min
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                estimated_new_aps, estimated_drive_min, stops_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now(UTC).replace(tzinfo=None).isoformat(),
@@ -385,6 +586,7 @@ def _persist_plan(
                 payload,
                 estimated_new_aps,
                 leg.duration_min,
+                stops_payload,
             ),
         )
         return int(cursor.lastrowid or 0)

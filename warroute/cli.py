@@ -167,13 +167,18 @@ def plan(
     home_lat: float = typer.Option(None, help="Override HOME_LAT"),
     home_lon: float = typer.Option(None, help="Override HOME_LON"),
     destination: str = typer.Option(None, "--destination", help="LAT,LON for oneway mode"),
+    stop: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--stop",
+        help="Multi-stop: LAT,LON or LAT,LON:DWELL_MIN. Repeatable. Implies oneway.",
+    ),
     out: str = typer.Option("drive.gpx", "--out", "-o", help="GPX output path"),
 ) -> None:
     """Plan a wardriving route from home, optimized for new-AP yield within the time budget."""
     from pathlib import Path
 
     from warroute.router.gpx import google_maps_url, write_gpx
-    from warroute.router.planner import PlannerError, PlanRequest
+    from warroute.router.planner import PlannerError, PlanRequest, Stop
     from warroute.router.planner import plan as run_plan
 
     settings = get_settings()
@@ -181,16 +186,32 @@ def plan(
         console.print(f"[red]Invalid --mode '{mode}'; use 'loop' or 'oneway'.[/red]")
         raise typer.Exit(code=2)
 
-    dest_lat: float | None = None
-    dest_lon: float | None = None
-    if mode == "oneway":
+    stops: list[Stop] = []
+    if stop:
+        for raw in stop:
+            try:
+                latlon, _, dwell_s = raw.partition(":")
+                lat_s, lon_s = latlon.split(",")
+                stops.append(
+                    Stop(
+                        lat=float(lat_s),
+                        lon=float(lon_s),
+                        dwell_min=int(dwell_s) if dwell_s else 0,
+                    )
+                )
+            except ValueError as exc:
+                console.print(f"[red]Invalid --stop {raw!r}: {exc}[/red]")
+                raise typer.Exit(code=2) from exc
+        mode = "oneway"  # any --stop overrides loop
+    elif mode == "oneway":
         if not destination:
-            console.print("[red]oneway mode requires --destination LAT,LON[/red]")
+            console.print(
+                "[red]oneway mode requires --destination LAT,LON or one or more --stop[/red]"
+            )
             raise typer.Exit(code=2)
         try:
             dest_lat_s, dest_lon_s = destination.split(",")
-            dest_lat = float(dest_lat_s)
-            dest_lon = float(dest_lon_s)
+            stops.append(Stop(lat=float(dest_lat_s), lon=float(dest_lon_s)))
         except ValueError as exc:
             console.print(f"[red]Invalid --destination: {exc}[/red]")
             raise typer.Exit(code=2) from exc
@@ -200,8 +221,7 @@ def plan(
         home_lon=home_lon if home_lon is not None else settings.home_lon,
         duration_min=duration_min,
         mode=mode,
-        destination_lat=dest_lat,
-        destination_lon=dest_lon,
+        stops=stops,
     )
 
     run_migrations()
