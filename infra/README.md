@@ -285,6 +285,25 @@ refuses, something edited prod files out-of-band:
    to clone fresh into `warroute.new`, atomic-swap, and keep the old dir for
    forensics. See the 2026-05-14 git-deploy switchover for the playbook.
 
+### Enabling the ntfy departure alarm (Phase 6b.2)
+
+The notify-due timer scans `scheduled_departures` every minute and pushes an
+ntfy alert when a planned departure is within `NTFY_DEPARTURE_LEAD_MIN` (default 5).
+Only fires when `NTFY_TOPIC` is set in `/etc/warroute/warroute.env`.
+
+```bash
+ssh warroute
+cp /home/warroute/warroute/infra/systemd/warroute-notify-due.service /etc/systemd/system/
+cp /home/warroute/warroute/infra/systemd/warroute-notify-due.timer   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now warroute-notify-due.timer
+systemctl list-timers warroute-notify-due.timer    # confirm Next: ~1 min out
+journalctl -u warroute-notify-due.service -n 20    # see scan runs ("Notified N departure(s).")
+```
+
+To raise/lower the lead time, edit `NTFY_DEPARTURE_LEAD_MIN` in
+`/etc/warroute/warroute.env` and the next scan picks it up; no daemon-reload needed.
+
 ### Rollback
 
 ```bash

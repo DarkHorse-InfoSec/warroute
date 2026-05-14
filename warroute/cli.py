@@ -307,6 +307,27 @@ def precheck() -> None:
         raise typer.Exit(code=1)
 
 
+@app.command("notify-due")
+def notify_due_cmd(
+    lead_min: int = typer.Option(
+        None,
+        "--lead-min",
+        help="Minutes ahead of departure to fire. Defaults to NTFY_DEPARTURE_LEAD_MIN.",
+    ),
+) -> None:
+    """Phase 6b.2: scan scheduled_departures, fire ntfy push for any due rows.
+
+    Idempotent and fast (single SQLite query + best-effort ntfy POSTs). Intended
+    to run from a systemd timer once per minute. Marks notified_at as the dedup
+    key, so a re-run within the same window is a no-op.
+    """
+    from warroute.scheduler import notify_due
+
+    run_migrations()
+    count = asyncio.run(notify_due(lead_min=lead_min))
+    console.print(f"[green]Notified {count} departure(s).[/green]")
+
+
 @coverage_app.command("probe-wdgowars")
 def probe_wdgowars(
     path: str = typer.Argument("/api/me", help="WDGoWars API path to GET"),
