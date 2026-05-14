@@ -148,6 +148,24 @@ class PlanRequest:
         return Waypoint(last.lat, last.lon, label=last.label or "Destination")
 
 
+@dataclass(frozen=True)
+class DaySegment:
+    """Phase 6c: a single day of a roadtrip plan.
+
+    Inclusive `start_idx`/`end_idx` reference positions in PlanResult.ordered_waypoints,
+    so a 3-day roadtrip with 8 waypoints might produce days = [(0,2), (2,5), (5,7)]
+    (overlapping ends are intentional: each day starts where the previous ended).
+
+    `day_number` is 1-indexed (matches user-facing labeling: "Day 1", "Day 2").
+    """
+
+    day_number: int
+    start_idx: int
+    end_idx: int
+    drive_min: float
+    dwell_min: int
+
+
 @dataclass
 class PlanResult:
     request: PlanRequest
@@ -161,6 +179,7 @@ class PlanResult:
     synthetic_density: bool = False  # True when every chosen cell is unprobed
     auto_painted_cells: int = 0  # rows added by the empty-DB grid paint, if any
     departure_at: datetime | None = None  # Phase 6b: derived from arrive_by - duration
+    days: list[DaySegment] = field(default_factory=list)  # Phase 6c: roadtrip day splits
 
     @property
     def estimated_drive_min(self) -> float:
@@ -170,6 +189,11 @@ class PlanResult:
     def total_trip_min(self) -> float:
         """Drive time + total dwell at user-specified stops."""
         return self.estimated_drive_min + self.request.total_dwell_min()
+
+    @property
+    def is_roadtrip(self) -> bool:
+        """True if any user stop is marked overnight_after (route spans days)."""
+        return any(s.overnight_after for s in self.request.stops)
 
 
 async def plan(request: PlanRequest, attach_geometry: bool = True) -> PlanResult:
@@ -470,6 +494,15 @@ async def _plan_multistop(
     total_distance_m = 0.0
     auto_painted_total = 0
 
+    # Phase 6c roadtrip day tracking. Each user stop with overnight_after=True
+    # closes the current day; the next segment starts a new day.
+    days: list[DaySegment] = []
+    day_n = 1
+    day_start_idx = 0
+    day_drive_s = 0.0
+    day_dwell_min = 0
+    has_overnights = any(s.overnight_after for s in request.stops)
+
     async with OrsClient() as ors:
         for i, (seg_start, seg_end) in enumerate(segments):
             sub_req = PlanRequest(
@@ -519,6 +552,40 @@ async def _plan_multistop(
             total_duration_s += seg_leg.duration_s
             total_distance_m += seg_leg.distance_m
 
+            # Roadtrip day accounting: attribute this segment's drive + the stop's
+            # dwell to the current day. Close out the day if the stop is overnight.
+            if has_overnights:
+                day_drive_s += seg_leg.duration_s
+                if i < len(request.stops):
+                    day_dwell_min += request.stops[i].dwell_min
+                if i < len(request.stops) and request.stops[i].overnight_after:
+                    end_idx = len(all_waypoints) - 1
+                    days.append(
+                        DaySegment(
+                            day_number=day_n,
+                            start_idx=day_start_idx,
+                            end_idx=end_idx,
+                            drive_min=day_drive_s / 60.0,
+                            dwell_min=day_dwell_min,
+                        )
+                    )
+                    day_n += 1
+                    day_start_idx = end_idx
+                    day_drive_s = 0.0
+                    day_dwell_min = 0
+
+        # Final day catch-all (the route that follows the last overnight marker).
+        if has_overnights:
+            days.append(
+                DaySegment(
+                    day_number=day_n,
+                    start_idx=day_start_idx,
+                    end_idx=len(all_waypoints) - 1,
+                    drive_min=day_drive_s / 60.0,
+                    dwell_min=day_dwell_min,
+                )
+            )
+
         total_duration_s += total_dwell * 60
 
         geometry = None
@@ -558,6 +625,7 @@ async def _plan_multistop(
             drops_for_slack=all_drops,
             synthetic_density=synthetic,
             auto_painted_cells=auto_painted_total,
+            days=days,
         )
     )
 

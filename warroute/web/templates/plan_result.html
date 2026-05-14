@@ -76,6 +76,23 @@
 </div>
 {% endif %}
 
+{% if result.days %}
+<h2>Itinerary by day</h2>
+<p class="muted" style="font-size: 13px;">
+  Roadtrip plan: {{ result.days|length }} days. Each day ends at the marked overnight stop.
+</p>
+{% for day in result.days %}
+<div class="day-segment" style="border-left: 3px solid var(--accent); padding-left: 0.75rem; margin: 0.75rem 0;">
+  <h3 style="margin: 0.25rem 0;">Day {{ day.day_number }}</h3>
+  <p class="muted" style="margin: 0.25rem 0; font-size: 13px;">
+    {{ "%.0f"|format(day.drive_min) }} min drive
+    {% if day.dwell_min %}+ {{ day.dwell_min }} min dwell{% endif %}
+    &middot; waypoints {{ day.start_idx }}-{{ day.end_idx }} of {{ result.ordered_waypoints|length - 1 }}
+  </p>
+</div>
+{% endfor %}
+{% endif %}
+
 {% if request_data.stops and request_data.stops|length > 1 %}
 <h2>Stops</h2>
 <table>
@@ -84,6 +101,7 @@
       <th>#</th>
       <th>Stop</th>
       <th>Dwell</th>
+      <th>Overnight</th>
     </tr>
   </thead>
   <tbody>
@@ -95,6 +113,7 @@
         <span class="muted">{{ "%.5f"|format(s.lat) }}, {{ "%.5f"|format(s.lon) }}</span>
       </td>
       <td>{% if s.dwell_min %}{{ s.dwell_min }} min{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td>{% if s.overnight_after %}<span class="badge good">overnight</span>{% else %}<span class="muted">-</span>{% endif %}</td>
     </tr>
     {% endfor %}
   </tbody>

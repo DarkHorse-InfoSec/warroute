@@ -565,6 +565,87 @@ def test_plan_request_total_dwell_min_sums_stops() -> None:
 
 
 @respx.mock
+async def test_roadtrip_splits_into_days_at_overnight_markers() -> None:
+    """Phase 6c: stops with overnight_after=True close a day; next segment starts a new one.
+
+    Layout: home -> A -> B (overnight) -> C -> D (overnight) -> E
+    Expected: 3 days. Day 1 = home..B, Day 2 = B..D, Day 3 = D..E.
+    """
+    run_migrations()
+    _seed_scored_grid(44.94, -72.21, radius_km=8)
+
+    respx.post(ORS_API_BASE + OPTIMIZATION_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "routes": [
+                    {
+                        "vehicle": 1,
+                        "duration": 600,
+                        "distance": 5000,
+                        "steps": [{"type": "job", "job": 0}, {"type": "job", "job": 1}],
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(ORS_API_BASE + DIRECTIONS_PATH).mock(
+        return_value=httpx.Response(
+            200,
+            json={"routes": [{"summary": {"distance": 20000, "duration": 2400}, "geometry": None}]},
+        )
+    )
+
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=240,
+        mode="oneway",
+        stops=[
+            Stop(lat=44.95, lon=-72.20, label="A", dwell_min=5),
+            Stop(lat=44.96, lon=-72.19, label="B (hotel)", dwell_min=600, overnight_after=True),
+            Stop(lat=44.97, lon=-72.18, label="C", dwell_min=10),
+            Stop(lat=44.98, lon=-72.17, label="D (hotel)", dwell_min=600, overnight_after=True),
+            Stop(lat=44.99, lon=-72.16, label="E"),
+        ],
+    )
+    result = await plan(req)
+
+    assert result.is_roadtrip is True
+    assert len(result.days) == 3
+    assert [d.day_number for d in result.days] == [1, 2, 3]
+    # Day 1's end_idx should equal Day 2's start_idx (the overnight stop is shared)
+    assert result.days[0].end_idx == result.days[1].start_idx
+    assert result.days[1].end_idx == result.days[2].start_idx
+    # Day 1 includes A's 5min dwell + B's 600min dwell.
+    assert result.days[0].dwell_min == 605
+    # Day 2 includes C + D dwells.
+    assert result.days[1].dwell_min == 610
+    # Day 3 includes E's dwell (0).
+    assert result.days[2].dwell_min == 0
+
+
+def test_non_roadtrip_plan_has_empty_days() -> None:
+    """No overnight_after markers -> result.days is empty + is_roadtrip is False."""
+    from warroute.clients.ors import RouteLeg
+    from warroute.router.planner import PlanResult
+
+    req = PlanRequest(
+        home_lat=44.94,
+        home_lon=-72.21,
+        duration_min=60,
+        mode="oneway",
+        stops=[Stop(lat=44.95, lon=-72.20)],
+    )
+    leg = RouteLeg(distance_m=0, duration_s=0, geometry=None, waypoint_order=[], raw={})
+    result = PlanResult(
+        request=req, chosen_cells=[], ordered_waypoints=[], leg=leg, estimated_new_aps=0
+    )
+    assert result.is_roadtrip is False
+    assert result.days == []
+
+
+@respx.mock
 async def test_plan_skips_my_owned_cells() -> None:
     """Cells the player already owns are excluded from candidates.
 
