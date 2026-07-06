@@ -1,0 +1,83 @@
+# WarRoute Caddyfile (Cloudflare Access variant): TLS via Let's Encrypt +
+# identity from Cloudflare Access at the edge, mapped into X-Forwarded-User.
+#
+# DRAFT - review before deploying; see infra/README.md Auth Modes section.
+#
+# =====================================================================
+# CRITICAL SECURITY REQUIREMENT - READ BEFORE DEPLOYING
+# =====================================================================
+# This config trusts the Cf-Access-Authenticated-User-Email request header
+# to identify the user. That header is only trustworthy if it can ONLY have
+# been set by Cloudflare. Caddy core CANNOT validate the Cloudflare Access
+# JWT without a plugin, so the security control here is NOT JWT validation.
+# The control is a network origin lock:
+#
+#   The origin server MUST be reachable ONLY from Cloudflare.
+#   Lock the Hetzner Cloud Firewall so inbound 443 is allowed ONLY from
+#   Cloudflare's published IP ranges: https://www.cloudflare.com/ips/
+#
+# If the origin is reachable directly (any IP can hit :443), an attacker
+# can send a forged Cf-Access-Authenticated-User-Email header and
+# impersonate ANY user. There is no softer version of this requirement.
+# Do not deploy this variant until the firewall allowlist is in place and
+# verified (try to curl the origin IP directly from an off-Cloudflare host;
+# it must be refused).
+#
+# For stronger defense-in-depth, add a Caddy Cloudflare-Access JWT
+# validation plugin and verify the assertion signature as well. That is
+# out of scope for this draft, which documents the firewall control only.
+# =====================================================================
+#
+# Install to /etc/caddy/Caddyfile and run:
+#   systemctl reload caddy
+#
+# Single-tenant by design. No login form, no JWT, no session inside the app.
+# Cloudflare Access challenges the user; warroute trusts X-Forwarded-User.
+
+warroute.darkhorseinfosec.com {
+    # ----- Reverse proxy to the uvicorn worker bound on localhost -----
+    # Cloudflare Access authenticates the user and forwards their identity in
+    # the Cf-Access-Authenticated-User-Email header. We map that email into
+    # X-Forwarded-User so the app can key per-user prefs, exactly as the
+    # basic_auth Caddyfile does with the basic_auth identity.
+    #
+    # The app trusts X-Forwarded-User because uvicorn binds to 127.0.0.1 and
+    # the origin firewall only admits Cloudflare (see the header note above).
+    # If you ever expose uvicorn directly, this trust is broken.
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-User {http.request.header.Cf-Access-Authenticated-User-Email}
+    }
+
+    # ----- Security headers -----
+    header {
+        # No third-party content lives on this domain, so be aggressive.
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        # Content-Security-Policy + Permissions-Policy are emitted by the app
+        # (warroute/web/app.py SecurityHeadersMiddleware): the CSP is nonce-based and
+        # needs a fresh per-request nonce, which Caddy can't mint. Don't set a CSP here
+        # too - two CSP headers would intersect and break the nonce. htmx + Leaflet are
+        # self-hosted under /static/vendor, so no CDN allowances are needed anywhere.
+        # Remove the default Caddy server header.
+        -Server
+    }
+
+    # ----- Logging -----
+    log {
+        output file /var/log/caddy/warroute.access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h  # 30 days
+        }
+        format json
+        level INFO
+    }
+}
+
+# Optional: redirect bare apex / www if you ever add them. Not needed for the
+# subdomain-only deployment.

@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Plan #{{ result.planned_route_id }}{% endblock %}
+{% block content %}
+<h1>Plan #{{ result.planned_route_id }}</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Cells picked</div>
+    <div class="value">{{ result.chosen_cells|length }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Estimated new APs</div>
+    <div class="value">{{ "{:,}".format(result.estimated_new_aps) }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Drive time</div>
+    <div class="value">{{ "%.0f"|format(result.estimated_drive_min) }} min</div>
+    {% if direct_min %}
+      <div class="label" style="margin-top: 0.4rem;">
+        Direct: {{ "%.0f"|format(direct_min) }} min
+        &middot; Detour: +{{ "%.0f"|format(result.estimated_drive_min - direct_min) }} min
+      </div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="label">Distance</div>
+    <div class="value" data-dist-km="{{ result.leg.distance_km }}">{{ "%.1f"|format(result.leg.distance_km) }} km</div>
+  </div>
+</div>
+
+{% if direct_fallback_notice %}
+<div class="flash warn">
+  {{ direct_fallback_notice }}
+</div>
+{% endif %}
+
+{% if loop_bumped_notice %}
+<div class="flash warn">
+  {{ loop_bumped_notice }}
+</div>
+{% endif %}
+
+{% if synthetic_density_notice %}
+<div class="flash info">
+  {{ synthetic_density_notice }}
+</div>
+{% endif %}
+
+{% if result.departure_at %}
+<div class="flash info" style="font-size: 1.05rem;">
+  <strong>Leave at {{ result.departure_at.strftime("%H:%M") }}</strong>
+  ({{ result.departure_at.strftime("%a %b %d") }})
+  {% if result.binding_stop_index is not none and result.binding_stop_index < request_data.stops|length %}
+    {% set binding_stop = request_data.stops[result.binding_stop_index] %}
+    to arrive at <strong>{{ binding_stop.label or "stop " ~ (result.binding_stop_index + 1) }}</strong>
+    by {{ binding_stop.arrive_by.strftime("%H:%M") }}.
+  {% elif request_data.arrive_by %}
+    to arrive by {{ request_data.arrive_by.strftime("%H:%M") }}.
+  {% endif %}
+  Trip total: {{ "%.0f"|format(result.total_trip_min) }} min
+  ({{ "%.0f"|format(result.estimated_drive_min) }} drive
+  {% if request_data.total_dwell_min() %}+ {{ request_data.total_dwell_min() }} dwell{% endif %}
+  + 2 min buffer).
+</div>
+{% endif %}
+
+{% if result.deadline_drops %}
+<div class="flash warn">
+  Dropped {{ result.deadline_drops }} AP-scanning cell(s) to make your deadline.
+  Wardriving detours are skipped on segments leading up to the binding stop.
+</div>
+{% endif %}
+
+{% if resolved_start_label %}
+<div class="flash info">
+  Start resolved to: <strong>{{ resolved_start_label }}</strong>
+</div>
+{% endif %}
+
+{% if resolved_destination_label %}
+<div class="flash info">
+  Destination resolved to: <strong>{{ resolved_destination_label }}</strong>
+</div>
+{% endif %}
+
+{% if result.drops_for_slack %}
+<div class="flash warn">
+  Dropped {{ result.drops_for_slack|length }} cell(s) to fit budget.
+</div>
+{% endif %}
+
+{% if result.days %}
+<h2>Itinerary by day</h2>
+<p class="muted" style="font-size: 13px;">
+  Roadtrip plan: {{ result.days|length }} days. Each day ends at the marked overnight stop.
+</p>
+{% for day in result.days %}
+<div class="day-segment" style="border-left: 3px solid var(--accent); padding-left: 0.75rem; margin: 0.75rem 0;">
+  <h3 style="margin: 0.25rem 0;">Day {{ day.day_number }}</h3>
+  <p class="muted" style="margin: 0.25rem 0; font-size: 13px;">
+    {{ "%.0f"|format(day.drive_min) }} min drive
+    {% if day.dwell_min %}+ {{ day.dwell_min }} min dwell{% endif %}
+    &middot; waypoints {{ day.start_idx }}-{{ day.end_idx }} of {{ result.ordered_waypoints|length - 1 }}
+  </p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if request_data.stops and request_data.stops|length > 1 %}
+<h2>Stops</h2>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Stop</th>
+      <th>Dwell</th>
+      <th>Arrive by</th>
+      <th>ETA</th>
+      <th>Overnight</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in request_data.stops %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>
+        {% if s.label %}<strong>{{ s.label }}</strong><br/>{% endif %}
+        <span class="muted">{{ "%.5f"|format(s.lat) }}, {{ "%.5f"|format(s.lon) }}</span>
+      </td>
+      <td>{% if s.dwell_min %}{{ s.dwell_min }} min{% else %}<span class="muted">-</span>{% endif %}</td>
+      <td>
+        {% if s.arrive_by %}
+          {{ s.arrive_by.strftime("%H:%M") }}
+          {% if result.binding_stop_index == loop.index0 %}
+            <span class="badge warn" title="This deadline determined the departure time">binding</span>
+          {% endif %}
+        {% else %}<span class="muted">-</span>{% endif %}
+      </td>
+      <td>
+        {% if result.stop_arrivals and loop.index0 < result.stop_arrivals|length %}
+          {{ result.stop_arrivals[loop.index0].strftime("%H:%M") }}
+        {% else %}<span class="muted">-</span>{% endif %}
+      </td>
+      <td>{% if s.overnight_after %}<span class="badge good">overnight</span>{% else %}<span class="muted">-</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div id="map" data-waypoints='{{ waypoints_geojson|tojson }}'
+     {% if route_geometry %}data-geometry='{{ route_geometry|tojson }}'{% endif %}
+     data-home-lat="{{ request_data.home_lat }}" data-home-lon="{{ request_data.home_lon }}"></div>
+
+<div style="margin-top: 0.75rem;">
+  <div class="muted" style="font-size: 12px; margin-bottom: 0.35rem;">
+    Navigate with (Google Maps &amp; GPX carry the whole loop; the rest route to the first stop only):
+  </div>
+  {% for opt in nav_options if opt.key == preferred_nav_app %}
+    <a class="btn" href="{{ opt.url }}"
+       {% if opt.key in ["google", "apple", "waze"] %}target="_blank" rel="noopener"{% endif %}>
+      {{ opt.label }}{% if not opt.full_route %} <span style="font-size: 11px; opacity: .8;">(1st stop)</span>{% endif %}
+    </a>
+  {% endfor %}
+  {% for opt in nav_options if opt.key != preferred_nav_app %}
+    <a class="btn secondary" href="{{ opt.url }}"
+       {% if opt.key in ["google", "apple", "waze"] %}target="_blank" rel="noopener"{% endif %}>
+      {{ opt.label }}{% if not opt.full_route %} <span style="font-size: 11px; opacity: .8;">(1st stop)</span>{% endif %}
+    </a>
+  {% endfor %}
+  <a class="btn secondary" href="/plan">Plan another</a>
+</div>
+
+{% if result.days %}
+<p style="margin-top: 0.5rem;">
+  <span class="muted" style="font-size: 13px; margin-right: 0.5rem;">Per-day GPX:</span>
+  {% for day in result.days %}
+    <a class="btn secondary" style="margin-right: 0.25rem;"
+       href="/plan/{{ result.planned_route_id }}/gpx/day/{{ day.day_number }}">
+      Day {{ day.day_number }}
+    </a>
+  {% endfor %}
+</p>
+{% endif %}
+
+{% if result.chosen_cells %}
+<h2>Picked cells</h2>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Cell</th>
+      <th>Ownership</th>
+      <th>Capture value</th>
+      <th>Est. APs</th>
+      <th>Score</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in result.chosen_cells %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ c.cell_id }}</td>
+      <td>
+        {% if c.ownership == "uncaptured" %}<span class="badge warn">uncaptured</span>
+        {% elif c.ownership == "rival" %}<span class="badge bad">rival</span>
+        {% else %}<span class="badge good">mine</span>{% endif %}
+      </td>
+      <td>{{ c.capture_value }}</td>
+      <td>{{ c.estimated_aps }}</td>
+      <td>{{ "%.0f"|format(c.score) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<script nonce="{{ request.state.csp_nonce }}">
+// Runs immediately (as an IIFE, not on DOMContentLoaded): this content is swapped
+// in by htmx after the plan POST, so DOMContentLoaded has already fired. The #map
+// div is above this script, so it exists when this runs.
+(function () {
+  var el = document.getElementById("map");
+  if (!el) { return; }
+  var waypoints = JSON.parse(el.dataset.waypoints);
+  var geometry = el.dataset.geometry ? JSON.parse(el.dataset.geometry) : null;
+  var homeLat = parseFloat(el.dataset.homeLat);
+  var homeLon = parseFloat(el.dataset.homeLon);
+
+  var map = L.map("map").setView([homeLat, homeLon], 11);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  if (geometry && typeof geometry === "object" && geometry.type) {
+    L.geoJSON(geometry, { style: { color: "#22d3ee", weight: 4, opacity: 0.85 } }).addTo(map);
+  }
+
+  var bounds = [];
+  L.geoJSON(waypoints, {
+    pointToLayer: function (feature, latlng) {
+      bounds.push([latlng.lat, latlng.lng]);
+      return L.circleMarker(latlng, {
+        radius: 7,
+        color: "#0e0f12",
+        weight: 2,
+        fillColor: "#22d3ee",
+        fillOpacity: 1
+      }).bindPopup(WarRoute.escapeHtml(feature.properties.label || ("Stop " + feature.properties.order)));
+    }
+  }).addTo(map);
+  if (bounds.length > 1) { map.fitBounds(bounds, { padding: [30, 30] }); }
+})();
+</script>
+{% endblock %}

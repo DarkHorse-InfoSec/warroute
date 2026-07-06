@@ -1,0 +1,64 @@
+# WarRoute Caddyfile (public / stateless variant): TLS via Let's Encrypt, NO
+# edge auth. For the stateless access model (DECISIONS.md 2026-07-04): every user
+# brings their own WiGLE / WDGoWars / ORS keys, held in their browser and sent as
+# X-* headers; the server stores nothing. Anyone can open the app, but no useful
+# operation runs without the caller's own keys, so there is nothing to gate.
+#
+# Install to /etc/caddy/Caddyfile and run: systemctl reload caddy
+#
+# Abuse protection:
+#   - WiGLE / WDGoWars operations require the CALLER's key (no server fallback),
+#     so an anonymous visitor cannot spend the operator's WiGLE/WDGoWars quota.
+#   - ORS routing may use a shared key, but the app guards it with a per-IP rate
+#     limit + per-day cap (see ORS_SHARED_* in the app config); when exhausted the
+#     user is told to add their own free ORS key.
+#   - For extra defense-in-depth you can add a Caddy rate-limit plugin
+#     (github.com/mholt/caddy-ratelimit) and throttle by client IP here. Optional;
+#     the app-level ORS guard is the primary control.
+#
+# To keep the beta CLOSED instead of public, deploy infra/Caddyfile (basic_auth)
+# or infra/Caddyfile.cloudflare (Cloudflare Access) instead. See infra/README.md
+# "Auth modes". The app is identical under all three; only the edge gate differs.
+
+warroute.darkhorseinfosec.com {
+    # ----- Reverse proxy to the uvicorn worker bound on localhost -----
+    # No X-Forwarded-User: there is no edge identity in the stateless model. The
+    # app reads per-user keys from the browser's X-Wigle-* / X-Wdgowars-* / X-Ors-*
+    # headers instead. X-Real-IP is forwarded so the app's ORS rate-limiter can key
+    # off the true client IP.
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        # Defense in depth: there is no edge identity on the public tier, so strip any
+        # client-supplied X-Forwarded-User. The app no longer trusts it, but stripping
+        # it here guarantees a spoofed identity can never reach the app.
+        header_up -X-Forwarded-User
+    }
+
+    # ----- Security headers -----
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        # Content-Security-Policy + Permissions-Policy are emitted by the app
+        # (warroute/web/app.py SecurityHeadersMiddleware): the CSP is nonce-based
+        # (script-src 'self' 'nonce-...', no 'unsafe-inline') and needs a fresh
+        # per-request nonce, which Caddy can't mint. Don't set a CSP here too - two
+        # CSP headers would intersect and break the nonce. htmx + Leaflet are
+        # self-hosted under /static/vendor, so no CDN allowances are needed anywhere.
+        -Server
+    }
+
+    # ----- Logging -----
+    log {
+        output file /var/log/caddy/warroute.access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h  # 30 days
+        }
+        format json
+        level INFO
+    }
+}

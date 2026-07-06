@@ -1,0 +1,62 @@
+{# Partial: WDGoWars player card. Rendered into #player-cards by /dashboard/player. #}
+{% if needs_wdgowars_key %}
+  <div class="flash info">
+    Add your WDGoWars key in <a href="/settings">Settings</a> to see your player stats here.
+    Your keys stay in this browser; nothing is stored on the server.
+  </div>
+{% elif wdgowars_error %}
+  <div class="flash warn">WDGoWars unreachable: {{ wdgowars_error }}</div>
+{% elif player %}
+  <div class="cards">
+    <div class="card">
+      <div class="label">Player</div>
+      <div class="value">{{ player.username }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Total entities</div>
+      <div class="value">{{ "{:,}".format(player.total) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">WiFi APs</div>
+      <div class="value">{{ "{:,}".format(player.wifi) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Today</div>
+      <div class="value">+{{ "{:,}".format(player.recent_today) }}</div>
+    </div>
+    <div class="card">
+      <div class="label">Quota left today</div>
+      {% set q = player.daily_quota_remaining or 0 %}
+      <div class="value">
+        {{ "{:,}".format(q) }}
+        {% if q < 1000 %}<span class="badge bad">low</span>{% endif %}
+      </div>
+    </div>
+    {% if player.gang %}
+    <div class="card">
+      <div class="label">Gang</div>
+      <div class="value" style="font-size: 1.1rem;">
+        {{ player.gang }}
+        {% if player.gang_id == 16 %}<span class="badge good">us</span>{% endif %}
+        {% if player.gang_role %}<br/><span class="muted" style="font-size: 12px;">{{ player.gang_role }}</span>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+    <div class="card">
+      <div class="label">Last 7 days</div>
+      <div class="value">+{{ "{:,}".format(player.recent_7d) }}</div>
+    </div>
+    {% if player.credits_balance is not none %}
+    <div class="card">
+      <div class="label">Credits</div>
+      <div class="value">{{ "{:,}".format(player.credits_balance) }}</div>
+    </div>
+    {% endif %}
+    {% if player.badge_count %}
+    <div class="card">
+      <div class="label">Badges</div>
+      <div class="value">{{ player.badge_count }}</div>
+    </div>
+    {% endif %}
+  </div>
+{% endif %}

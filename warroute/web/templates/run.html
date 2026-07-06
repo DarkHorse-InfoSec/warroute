@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Run #{{ run.id }}{% endblock %}
+{% block content %}
+<h1>Run #{{ run.id }}</h1>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Total APs</div>
+    <div class="value">{{ run.total_aps or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="label">New APs</div>
+    <div class="value">+{{ run.new_aps or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="label">WiGLE</div>
+    <div class="value">
+      {% if run.uploaded_wigle_at %}<span class="badge good">uploaded</span>
+      {% else %}<span class="badge bad">no</span>{% endif %}
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">WDGoWars</div>
+    <div class="value">
+      {% if run.uploaded_wdgowars_at %}<span class="badge good">uploaded</span>
+      {% else %}<span class="badge bad">no</span>{% endif %}
+    </div>
+  </div>
+</div>
+
+<h2>Scanned access points{% if mapped_aps %} <span class="muted" style="font-weight:400;">({{ mapped_aps }} mapped)</span>{% endif %}</h2>
+{% if mapped_aps and mapped_aps > 0 %}
+<div id="map" data-center-lat="{{ map_center_lat }}" data-center-lon="{{ map_center_lon }}"></div>
+<div class="legend">
+  <span><span class="swatch" style="background:#f87171;"></span>Open</span>
+  <span><span class="swatch" style="background:#f59e0b;"></span>WEP</span>
+  <span><span class="swatch" style="background:#4ade80;"></span>WPA/WPA2</span>
+  <span><span class="swatch" style="background:#a78bfa;"></span>WPA3</span>
+</div>
+<p class="muted" style="font-size: 13px; margin-top: 0.5rem;">
+  {% if map_truncated %}Showing the {{ map_cap }} most recently seen of {{ mapped_aps }} APs.{% else %}Each dot is an AP you scanned, at where it was first seen.{% endif %}
+  Post-drive review only - the map is built after upload, never live while driving.
+</p>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  function initRunMap() {
+    var el = document.getElementById("map");
+    if (!el || el.dataset.inited || typeof L === "undefined") { return; }
+    el.dataset.inited = "1";
+    var clat = parseFloat(el.dataset.centerLat);
+    var clon = parseFloat(el.dataset.centerLon);
+    var map = L.map("map").setView([isNaN(clat) ? 0 : clat, isNaN(clon) ? 0 : clon], 13);
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "&copy; OpenStreetMap"
+    }).addTo(map);
+
+    function colorFor(enc) {
+      var e = (enc || "").toUpperCase();
+      if (e.indexOf("WPA3") !== -1 || e.indexOf("SAE") !== -1) return "#a78bfa";
+      if (e.indexOf("WPA") !== -1) return "#4ade80";
+      if (e.indexOf("WEP") !== -1) return "#f59e0b";
+      return "#f87171"; // open / no auth advertised
+    }
+    // SSIDs are attacker-controlled (anyone can name a network "<img onerror>"),
+    // so escape everything before putting it in a popup.
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+      });
+    }
+
+    fetch("/runs/{{ run.id }}/observations.geojson")
+      .then(function (r) { return r.json(); })
+      .then(function (gj) {
+        if (!gj.features || !gj.features.length) { return; }
+        var layer = L.geoJSON(gj, {
+          pointToLayer: function (feature, latlng) {
+            var c = colorFor(feature.properties.encryption);
+            return L.circleMarker(latlng, {
+              radius: 4, color: c, weight: 1, fillColor: c, fillOpacity: 0.7
+            });
+          },
+          onEachFeature: function (feature, lyr) {
+            var p = feature.properties;
+            lyr.bindPopup(
+              "<b>" + (esc(p.ssid) || "(hidden SSID)") + "</b><br>"
+              + esc(p.bssid) + "<br>"
+              + "Enc: " + (esc(p.encryption) || "?") + "<br>"
+              + "Seen: " + (p.times_seen != null ? p.times_seen : "?") + "x"
+            );
+          }
+        }).addTo(map);
+        map.fitBounds(layer.getBounds(), { padding: [20, 20] });
+      });
+  }
+  // Works on a full page load (Leaflet is deferred, so wait for DOMContentLoaded)
+  // and on an htmx swap into an already-loaded document (run now; L is present).
+  if (document.readyState === "loading") {
+    window.addEventListener("DOMContentLoaded", initRunMap);
+  } else {
+    initRunMap();
+  }
+})();
+</script>
+{% else %}
+<p class="muted" style="margin-top: 0.5rem;">
+  No mapped access points for this run yet. APs show up here after the CSV is
+  uploaded - WarRoute plots them post-drive; there is no live in-drive map, by design.
+</p>
+{% endif %}
+
+<dl class="kv">
+  <dt>Source</dt><dd>{{ run.source }}</dd>
+  <dt>CSV path</dt><dd>{{ run.csv_path }}</dd>
+  <dt>CSV sha256</dt><dd>{{ run.csv_sha256 }}</dd>
+  <dt>Started</dt><dd>{{ run.started_at }}</dd>
+  <dt>Ended</dt><dd>{{ run.ended_at }}</dd>
+  {% if run.distance_km %}<dt>Distance</dt><dd data-dist-km="{{ run.distance_km }}">{{ "%.1f"|format(run.distance_km) }} km</dd>{% endif %}
+  {% if run.points_earned %}<dt>Points</dt><dd>{{ run.points_earned }}</dd>{% endif %}
+  <dt>WDGoWars run id</dt><dd>{{ run.wdgowars_run_id or "-" }}</dd>
+</dl>
+
+{% if related_plan %}
+<h2>Predicted vs actual</h2>
+<table>
+  <thead><tr><th></th><th>Plan #{{ related_plan.id }}</th><th>Actual</th></tr></thead>
+  <tbody>
+    <tr><td>Mode</td><td>{{ related_plan.mode }}</td><td>-</td></tr>
+    <tr><td>Duration (min)</td><td>{{ related_plan.duration_min }}</td><td>{{ related_plan.estimated_drive_min }}</td></tr>
+    <tr><td>New APs</td><td>~{{ related_plan.estimated_new_aps }}</td><td>{{ run.new_aps or 0 }}</td></tr>
+  </tbody>
+</table>
+{% endif %}
+
+<p><a class="btn secondary" href="/">Back to dashboard</a></p>
+{% endblock %}

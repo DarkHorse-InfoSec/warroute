@@ -1,0 +1,66 @@
+# WarRoute Caddyfile -- TLS via Let's Encrypt + HTTP basic auth at the edge.
+#
+# Install to /etc/caddy/Caddyfile and run:
+#   systemctl reload caddy
+#
+# Single-tenant by design. No login form, no JWT, no session. Caddy challenges
+# at the reverse-proxy layer; warroute itself trusts the connection.
+
+warroute.darkhorseinfosec.com {
+    # ----- Basic auth -----
+    # Initial operator account. Generate the hash with:
+    #   caddy hash-password --plaintext '<YOUR_PASSWORD>'
+    # Paste the bcrypt hash (the long $2a$... string) below.
+    #
+    # Tester accounts (beta phase) are added/removed via:
+    #   infra/add-tester.sh <username>
+    #   infra/remove-tester.sh <username>
+    # which append/strip lines inside this block and reload Caddy.
+    # See DECISIONS.md 2026-05-14 for the multi-user-basic-auth rationale.
+    basic_auth {
+        admin REPLACE_WITH_BCRYPT_HASH_FROM_CADDY_HASH_PASSWORD
+    }
+
+    # ----- Reverse proxy to the uvicorn worker bound on localhost -----
+    # X-Forwarded-User passes the basic_auth identity upstream so the app can
+    # key per-user prefs (home location). See DECISIONS.md 2026-05-14 (late evening).
+    # The app trusts this header because uvicorn binds to 127.0.0.1; nothing
+    # outside Caddy can reach it. If you ever expose uvicorn directly, strip
+    # this header at the app boundary or move auth into the app.
+    reverse_proxy 127.0.0.1:8000 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-User {http.auth.user.id}
+    }
+
+    # ----- Security headers -----
+    header {
+        # No third-party content lives on this domain, so be aggressive.
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options    "nosniff"
+        X-Frame-Options           "DENY"
+        Referrer-Policy           "strict-origin-when-cross-origin"
+        # Content-Security-Policy + Permissions-Policy are emitted by the app
+        # (warroute/web/app.py SecurityHeadersMiddleware): the CSP is nonce-based and
+        # needs a fresh per-request nonce, which Caddy can't mint. Don't set a CSP here
+        # too - two CSP headers would intersect and break the nonce. htmx + Leaflet are
+        # self-hosted under /static/vendor, so no CDN allowances are needed anywhere.
+        # Remove the default Caddy server header.
+        -Server
+    }
+
+    # ----- Logging -----
+    log {
+        output file /var/log/caddy/warroute.access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h  # 30 days
+        }
+        format json
+        level INFO
+    }
+}
+
+# Optional: redirect bare apex / www if you ever add them. Not needed for the
+# subdomain-only deployment.

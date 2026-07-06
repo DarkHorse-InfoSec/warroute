@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+{# Player card is credential-gated, so it loads via htmx after the page renders;
+   the global header hook attaches the browser's WDGoWars key. #}
+<div id="player-cards" hx-get="/dashboard/player" hx-trigger="load">
+  <p class="muted">Loading your player stats...</p>
+</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="label">Cells in radius</div>
+    <div class="value">{{ shell.cells_total }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Owned by me</div>
+    <div class="value">{{ shell.cells_owned_by_me }}</div>
+  </div>
+  <div class="card">
+    <div class="label">Density refreshed</div>
+    <div class="value">{{ shell.cells_with_density }}</div>
+  </div>
+</div>
+
+{# Recent runs link to /runs, which serves exact scanned-AP coordinates and is
+   gated by expose_run_data. Only shown on a trusted deployment that opted in. #}
+{% if shell.expose_run_data %}
+<h2>Recent runs</h2>
+{% if shell.recent_runs %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th><th>Source</th><th>Started</th><th>APs</th><th>New</th><th>WiGLE</th><th>WDGoWars</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in shell.recent_runs %}
+    <tr>
+      <td><a href="/runs/{{ run.id }}">#{{ run.id }}</a></td>
+      <td>{{ run.source }}</td>
+      <td>{{ run.started_at.split('T')[0] if 'T' in (run.started_at|string) else run.started_at }}</td>
+      <td>{{ run.total_aps or 0 }}</td>
+      <td>{{ run.new_aps or 0 }}</td>
+      <td>{% if run.uploaded_wigle_at %}<span class="badge good">ok</span>{% else %}<span class="badge bad">no</span>{% endif %}</td>
+      <td>{% if run.uploaded_wdgowars_at %}<span class="badge good">ok</span>{% else %}<span class="badge bad">no</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No runs ingested yet. Drop a CSV into the spool dir, or run <code>warroute upload &lt;file&gt;</code>.</p>
+{% endif %}
+{% endif %}
+
+<h2>Next moves</h2>
+<p>
+  <a class="btn" href="/plan">Plan a drive</a>
+  <a class="btn secondary" href="/coverage">View coverage map</a>
+</p>
+{% endblock %}

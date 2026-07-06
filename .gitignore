@@ -1,0 +1,81 @@
+# --- Secrets (NEVER commit) ---
+.env
+.env.*
+!.env.example
+*.pem
+*_rsa
+*_ed25519
+secrets/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.hypothesis/
+
+# --- Virtual envs ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- uv ---
+# (lockfile uv.lock SHOULD be committed; cache should not)
+.uv-cache/
+
+# --- Local data ---
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+warroute.db
+data/
+osm-cache/
+gpx-out/
+spool/
+
+# --- Operator-local files (never commit; may hold tester PII) ---
+# testers.csv holds tester usernames/emails for the onboarding script.
+# upload_template.csv (a fake-MAC sample CSV) is intentionally tracked.
+testers.csv
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Local agent/editor state (kept out of the public repo) ---
+.claude/settings.local.json
+CLAUDE.md
+.claude/
+tasks/
+
+# --- Playwright MCP snapshot artifacts ---
+.playwright-mcp/

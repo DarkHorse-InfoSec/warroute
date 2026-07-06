@@ -1,0 +1,333 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Plan{% endblock %}
+{% block content %}
+<h1>Plan a drive</h1>
+
+{% if error %}
+  <div class="flash error">{{ error }}</div>
+{% endif %}
+
+<form class="stack" method="post" action="/plan" id="plan-form"
+      hx-post="/plan" hx-target="main.container" hx-select="main.container"
+      hx-swap="outerHTML" hx-push-url="true" hx-disinherit="*">
+  <div>
+    <label for="duration_min" id="duration-label">Time budget (min)</label>
+    <input id="duration_min" name="duration_min" type="number" min="10" max="480" step="5"
+           value="{{ defaults.duration_min }}" data-default="{{ defaults.duration_min }}" required />
+    <span class="muted" id="duration-hint" style="font-size: 12px; display: block; margin-top: 0.25rem;">
+      Loop: total drive time. Oneway: total including the direct drive
+      (any extra over the direct route becomes AP-scanning detour). Dwell minutes
+      at each stop are subtracted from the budget before routing.
+    </span>
+  </div>
+
+  <div>
+    <label for="mode">Mode</label>
+    <select id="mode" name="mode">
+      <option value="loop" selected>loop (start = end, stops optional)</option>
+      <option value="oneway">oneway (start &gt; final stop)</option>
+    </select>
+  </div>
+
+  <div class="geocode-field" data-field="start">
+    <label for="start_query">
+      Starting location
+      <span class="muted" id="start-home-hint">(blank = home)</span>
+    </label>
+
+    <input id="start_query"
+           name="start_query"
+           type="search"
+           placeholder='e.g. "1160 Howell Mill Road NW, Suite 210, Atlanta GA" (blank = start from home)'
+           data-geocode-input
+           autocomplete="off"
+           inputmode="search" />
+
+    <div id="start-hits" class="geocode-results"></div>
+
+    <input type="hidden" id="start" name="start" value="" />
+
+    <div id="start-chosen" class="chosen-chip" hidden>
+      <span class="chip-pin" aria-hidden="true">PIN</span>
+      <span id="start-chosen-label" class="chip-label"></span>
+      <button type="button"
+              class="chip-clear"
+              data-action="geocode-clear" data-field="start"
+              aria-label="Clear starting location">change</button>
+    </div>
+  </div>
+
+  <div id="stops-section">
+    <label>Stops <span class="muted">(in order; last stop is the final destination for oneway)</span></label>
+    <div id="stops-list"></div>
+    <button type="button" id="add-stop-btn" class="btn secondary" data-action="stop-add">
+      + Add stop
+    </button>
+    {% if oneway_required_stop_message %}
+      <div class="flash error" style="margin-top: 0.5rem;">{{ oneway_required_stop_message }}</div>
+    {% endif %}
+  </div>
+
+  <div>
+    <label for="arrive_by">Arrive by <span class="muted">(optional - planner computes departure)</span></label>
+    <input id="arrive_by" name="arrive_by" type="datetime-local" />
+    <span class="muted" style="font-size: 12px; display: block; margin-top: 0.25rem;">
+      Leave blank to plan by duration only. When set, the result page shows the
+      time you need to leave to make it on time, including stop dwells.
+    </span>
+  </div>
+
+  <details>
+    <summary class="advanced-summary">Advanced: raw lat/lon override for home</summary>
+    <div class="advanced-grid">
+      <div>
+        <label for="home_lat">Lat</label>
+        <input id="home_lat" name="home_lat" type="text" value="{{ defaults.home_lat }}" />
+      </div>
+      <div>
+        <label for="home_lon">Lon</label>
+        <input id="home_lon" name="home_lon" type="text" value="{{ defaults.home_lon }}" />
+      </div>
+    </div>
+  </details>
+
+  <button type="submit">Plan it</button>
+</form>
+
+<template id="stop-row-template">
+  <div class="stop-row geocode-field">
+    <div class="stop-row-header">
+      <span class="stop-number">Stop <span class="stop-index">__I__</span></span>
+      <button type="button" class="stop-remove" aria-label="Remove stop"
+              data-action="stop-remove">X</button>
+    </div>
+    <input class="stop-query"
+           type="search"
+           placeholder='e.g. "Grand Central Station" or "44.96,-72.19"'
+           data-geocode-input
+           autocomplete="off"
+           inputmode="search" />
+    <div class="geocode-results stop-hits"></div>
+    <input class="stop-payload" type="hidden" name="stops" value="" />
+    <div class="stop-chosen chosen-chip" hidden>
+      <span class="chip-pin" aria-hidden="true">PIN</span>
+      <span class="stop-chosen-label chip-label"></span>
+      <button type="button" class="chip-clear"
+              data-action="stop-clear"
+              aria-label="Clear stop">change</button>
+    </div>
+    <label class="stop-dwell-label">Dwell (min)
+      <input class="stop-dwell" type="number" min="0" max="240" step="1" value="0" />
+    </label>
+    <label class="stop-arrive-by-label" title="Hard deadline: planner ensures arrival here at or before this time">
+      Arrive by
+      <input class="stop-arrive-by" type="time" />
+    </label>
+    <label class="stop-overnight-label" title="Roadtrip: end this day's drive here">
+      <input class="stop-overnight" type="checkbox" />
+      <span>Overnight after</span>
+    </label>
+  </div>
+</template>
+
+<script nonce="{{ request.state.csp_nonce }}">
+// Generic helpers shared by all .geocode-field blocks (start, ...).
+function warrouteSelectGeocode(btn) {
+  var fieldEl = btn.closest('.geocode-field');
+  if (!fieldEl) { return; }
+  var name = fieldEl.dataset.field;
+  var lat = btn.dataset.lat;
+  var lon = btn.dataset.lon;
+  var label = btn.dataset.label || (lat + "," + lon);
+
+  // Stop rows have no data-field and use class-based selectors.
+  if (!name && fieldEl.classList.contains('stop-row')) {
+    warrouteStopSelectGeocode(fieldEl, lat, lon, label);
+    return;
+  }
+  document.getElementById(name).value = lat + "," + lon;
+  document.getElementById(name + "-chosen-label").textContent = label;
+  document.getElementById(name + "-chosen").hidden = false;
+  document.getElementById(name + "_query").hidden = true;
+  document.getElementById(name + "-hits").innerHTML = "";
+}
+function warrouteClearGeocode(name) {
+  document.getElementById(name).value = "";
+  document.getElementById(name + "-chosen").hidden = true;
+  var q = document.getElementById(name + "_query");
+  q.hidden = false;
+  q.value = "";
+  q.focus();
+  document.getElementById(name + "-hits").innerHTML = "";
+}
+
+// Stop list management. Stops are 1-indexed in the UI; the form posts name="stops"
+// values formatted as "lat,lon[:dwell_min]" matching the CLI's --stop flag.
+function warrouteRenumberStops() {
+  var rows = document.querySelectorAll('#stops-list .stop-row');
+  rows.forEach(function (row, i) {
+    var label = row.querySelector('.stop-index');
+    if (label) { label.textContent = String(i + 1); }
+  });
+}
+// Stop 1's example is always Grand Central Station - a tip of the hat to Hackers
+// (1995), where the crew meets at Grand Central. Later stops rotate through other
+// recognizable landmarks so the placeholder varies. Grand Central is deliberately
+// NOT in the random pool, so it stays unique to stop 1. Purely illustrative; nothing
+// is auto-filled or geocoded unless the user types it.
+var WARROUTE_STOP1_EXAMPLE = 'e.g. "Grand Central Station" or "44.96,-72.19"';
+var WARROUTE_STOP_EXAMPLES = [
+  "Golden Gate Bridge", "Statue of Liberty", "The Alamo", "Space Needle",
+  "Fenway Park", "Hollywood Sign", "Mount Rushmore", "Willis Tower", "Graceland",
+  "Times Square", "Gateway Arch", "Niagara Falls", "Lincoln Memorial", "Wrigley Field",
+  "Cape Canaveral", "Area 51", "The French Quarter", "Millennium Park"
+];
+// Shuffle-bag: draw from a shuffled copy of the list and don't refill until it's
+// empty, so every landmark appears once before any repeats. With 18 landmarks and
+// nobody adding that many stops, that means no repeats at all (fixes stops 2 and 3,
+// or 6 and 7, showing the same example).
+var warrouteExampleBag = [];
+function warrouteRandomStopPlaceholder() {
+  if (warrouteExampleBag.length === 0) {
+    warrouteExampleBag = WARROUTE_STOP_EXAMPLES.slice();
+    for (var i = warrouteExampleBag.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = warrouteExampleBag[i];
+      warrouteExampleBag[i] = warrouteExampleBag[j];
+      warrouteExampleBag[j] = t;
+    }
+  }
+  return 'e.g. "' + warrouteExampleBag.pop() + '" or "44.96,-72.19"';
+}
+function warrouteAddStop() {
+  var tpl = document.getElementById('stop-row-template');
+  var clone = tpl.content.firstElementChild.cloneNode(true);
+  var list = document.getElementById('stops-list');
+  list.appendChild(clone);
+  warrouteRenumberStops();
+  if (window.htmx) { htmx.process(clone); }
+  var input = clone.querySelector('.stop-query');
+  if (input) {
+    var isFirst = list.querySelectorAll('.stop-row').length === 1;
+    input.placeholder = isFirst ? WARROUTE_STOP1_EXAMPLE : warrouteRandomStopPlaceholder();
+    input.focus();
+  }
+}
+function warrouteRemoveStop(btn) {
+  var row = btn.closest('.stop-row');
+  if (row && row.parentNode) { row.parentNode.removeChild(row); }
+  warrouteRenumberStops();
+}
+function warrouteStopSelectGeocode(row, lat, lon, label) {
+  row.querySelector('.stop-payload').value = lat + "," + lon;
+  row.querySelector('.stop-chosen-label').textContent = label;
+  row.querySelector('.stop-chosen').hidden = false;
+  row.querySelector('.stop-query').hidden = true;
+  var hits = row.querySelector('.stop-hits');
+  if (hits) { hits.innerHTML = ""; }
+}
+function warrouteClearStop(btn) {
+  var row = btn.closest('.stop-row');
+  if (!row) { return; }
+  row.querySelector('.stop-payload').value = "";
+  row.querySelector('.stop-chosen').hidden = true;
+  var q = row.querySelector('.stop-query');
+  q.hidden = false;
+  q.value = "";
+  q.focus();
+  var hits = row.querySelector('.stop-hits');
+  if (hits) { hits.innerHTML = ""; }
+}
+
+// Time budget is required for a loop (it sets the loop's size) but optional for a
+// oneway trip ("just get me there" - road trip or a hop to a fixed address). Toggle
+// the field's required-ness, placeholder, and hint to match the selected mode. If the
+// user hasn't hand-typed a budget, blank it when switching to oneway so it defaults
+// empty, per the intent that a oneway has no budget unless you ask for one.
+var warrouteDurTouched = false;
+function warrouteApplyModeUI() {
+  var modeEl = document.getElementById('mode');
+  var dur = document.getElementById('duration_min');
+  var lbl = document.getElementById('duration-label');
+  var hint = document.getElementById('duration-hint');
+  if (!modeEl || !dur) { return; }
+  if (modeEl.value === 'oneway') {
+    dur.required = false;
+    if (!warrouteDurTouched) { dur.value = ''; }
+    dur.placeholder = 'optional - blank = direct route';
+    if (lbl) { lbl.textContent = 'Time budget (min, optional)'; }
+    if (hint) {
+      hint.textContent = 'Blank = just route me there (the direct drive). Enter minutes to'
+        + ' weave in AP-scanning detours: any time over the direct route becomes wardriving.'
+        + ' Dwell minutes at each stop are subtracted first.';
+    }
+  } else {
+    dur.required = true;
+    if (!dur.value) { dur.value = dur.dataset.default || '30'; }
+    dur.placeholder = '';
+    if (lbl) { lbl.textContent = 'Time budget (min)'; }
+    if (hint) {
+      hint.textContent = 'Total loop drive time. Dwell minutes at each stop are'
+        + ' subtracted from the budget before routing.';
+    }
+  }
+}
+(function () {
+  var modeEl = document.getElementById('mode');
+  var dur = document.getElementById('duration_min');
+  if (dur) { dur.addEventListener('input', function () { warrouteDurTouched = true; }); }
+  if (modeEl) { modeEl.addEventListener('change', warrouteApplyModeUI); }
+  warrouteApplyModeUI();
+})();
+
+// Before submit: pack dwell + overnight + arrive_by into the hidden "stops"
+// payload as "lat,lon[:dwell[:overnight[:HHMM]]]" matching the CLI --stop format.
+// HHMM is 4-digit 24h (e.g. 1600 = 4PM); colons are stripped from the time input.
+// Empty rows (no lat/lon chosen) are dropped.
+// Stateless tier: the server has no per-user home, so pre-fill the home override
+// fields from this browser's saved config. A blank start then resolves to it.
+(function () {
+  var c = (window.WarRoute && WarRoute.load()) || {};
+  if (c.home_lat) { document.getElementById('home_lat').value = c.home_lat; }
+  if (c.home_lon) { document.getElementById('home_lon').value = c.home_lon; }
+  if (c.home_label) {
+    var hint = document.getElementById('start-home-hint');
+    if (hint) { hint.textContent = '(blank = home: ' + c.home_label + ')'; }
+  }
+})();
+
+document.getElementById('plan-form').addEventListener('submit', function () {
+  var rows = document.querySelectorAll('#stops-list .stop-row');
+  rows.forEach(function (row) {
+    var payloadEl = row.querySelector('.stop-payload');
+    var dwellEl = row.querySelector('.stop-dwell');
+    var overnightEl = row.querySelector('.stop-overnight');
+    var arriveByEl = row.querySelector('.stop-arrive-by');
+    if (!payloadEl.value) {
+      // Strip the row's payload field so empty rows don't post.
+      payloadEl.removeAttribute('name');
+      return;
+    }
+    var dwell = parseInt(dwellEl.value, 10) || 0;
+    var overnight = overnightEl && overnightEl.checked;
+    var arriveByRaw = arriveByEl && arriveByEl.value ? arriveByEl.value : "";
+    var arriveHHMM = arriveByRaw.replace(":", "");
+    if (arriveHHMM) {
+      // Need to position arrive at slot [3]; emit dwell + (overnight|empty) first.
+      payloadEl.value = payloadEl.value + ":" + dwell + ":" + (overnight ? "overnight" : "") + ":" + arriveHHMM;
+    } else if (overnight) {
+      payloadEl.value = payloadEl.value + ":" + dwell + ":overnight";
+    } else if (dwell > 0) {
+      payloadEl.value = payloadEl.value + ":" + dwell;
+    }
+  });
+});
+</script>
+
+<p style="color: var(--muted); font-size: 13px; margin-top: 1rem;">
+  Reachable radius is computed at <span data-speed-kmh="40">40 km/h</span> (rural). Loop = drive a circuit (optionally
+  via stops); oneway = end at the last stop. Add multiple stops to chain destinations
+  (errands, daycare drop-off, road trip). The planner fits AP-scanning cells between
+  consecutive stops within each segment's time slice.
+</p>
+{% endblock %}

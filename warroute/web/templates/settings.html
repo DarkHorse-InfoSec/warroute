@@ -1,0 +1,342 @@
+{% extends "base.html" %}
+{% block title %}WarRoute - Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<div class="flash info">
+  Everything here is stored <strong>only in this browser</strong>. Your keys are
+  attached to each request so WarRoute can talk to WiGLE / WDGoWars / ORS on your
+  behalf, but they are <strong>never stored on the server</strong>. Clearing site
+  data wipes them; use Export / Import below to move to another device. For maximum
+  privacy, run your own copy (it is open source).
+</div>
+
+<div id="save-indicator" class="muted" style="font-size: 12px; height: 1.2em;" aria-live="polite"></div>
+
+<h2>Your API keys</h2>
+<p class="muted" style="font-size: 13px;">
+  Bring your own accounts so plans and stats use <em>your</em> quotas. Nothing is shared.
+</p>
+
+<form class="stack" id="settings-form" autocomplete="off">
+  <details open>
+    <summary class="advanced-summary">WiGLE.net <span class="muted">(networks + uploads)</span></summary>
+    <div class="advanced-grid" style="margin-top: 0.5rem;">
+      <div>
+        <label for="wigle_name">WiGLE name</label>
+        <input id="wigle_name" data-cfg="wigle_name" type="text" placeholder="AID00000000000000" />
+      </div>
+      <div>
+        <label for="wigle_token">WiGLE token</label>
+        <input id="wigle_token" data-cfg="wigle_token" type="password" placeholder="API token" />
+      </div>
+    </div>
+    <span class="muted" style="font-size: 12px;">Get these at
+      <a href="https://wigle.net/account" target="_blank" rel="noopener">wigle.net/account</a>.</span>
+  </details>
+
+  <details>
+    <summary class="advanced-summary">WDGoWars <span class="muted">(territory game)</span></summary>
+    <div class="advanced-grid" style="margin-top: 0.5rem;">
+      <div>
+        <label for="wdgowars_name">WDGoWars username</label>
+        <input id="wdgowars_name" data-cfg="wdgowars_name" type="text" />
+      </div>
+      <div>
+        <label for="wdgowars_token">WDGoWars API token</label>
+        <input id="wdgowars_token" data-cfg="wdgowars_token" type="password" />
+      </div>
+    </div>
+    <span class="muted" style="font-size: 12px;">Get the token at
+      <a href="https://wdgwars.pl/profile" target="_blank" rel="noopener">wdgwars.pl/profile</a>.</span>
+  </details>
+
+  <details>
+    <summary class="advanced-summary">OpenRouteService <span class="muted">(routing + address search)</span></summary>
+    <div>
+      <label for="ors_key">ORS API key</label>
+      <input id="ors_key" data-cfg="ors_key" type="password" placeholder="API key" />
+      <span class="muted" style="font-size: 12px; display: block; margin-top: 0.25rem;">
+        Free: 2000 routes/day. Sign up at
+        <a href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>.
+        Without your own key, planning still works on a shared key with a daily limit,
+        and live address search is disabled.
+      </span>
+    </div>
+  </details>
+
+  <details>
+    <summary class="advanced-summary">Optional <span class="muted">(Mapbox, ntfy)</span></summary>
+    <div style="margin-top: 0.5rem;">
+      <label for="mapbox_key">Mapbox key <span class="muted">(routing fallback)</span></label>
+      <input id="mapbox_key" data-cfg="mapbox_key" type="password" />
+    </div>
+    <div style="margin-top: 0.5rem;">
+      <label for="ntfy_topic">ntfy topic <span class="muted">(push notifications)</span></label>
+      <input id="ntfy_topic" data-cfg="ntfy_topic" type="text" placeholder="warroute-yourname-private" />
+    </div>
+  </details>
+</form>
+
+<h2 style="margin-top: 1.5rem;">Home location</h2>
+<p class="muted" style="font-size: 13px;">Pre-fills the start of every plan on this device.</p>
+<div class="geocode-field">
+  <label for="home-address">Address</label>
+  <input id="home-address" type="search" autocomplete="off" inputmode="search"
+         placeholder='e.g. "907 Smart St Newport VT"'
+         data-geocode-input />
+  <div id="home-hits" class="geocode-results"></div>
+  <details style="margin-top: 0.5rem;">
+    <summary class="advanced-summary">Or: raw lat / lon</summary>
+    <div class="advanced-grid">
+      <div><label for="home_lat">Lat</label><input id="home_lat" data-cfg="home_lat" type="text" /></div>
+      <div><label for="home_lon">Lon</label><input id="home_lon" data-cfg="home_lon" type="text" /></div>
+    </div>
+  </details>
+  <input id="home_label" data-cfg="home_label" type="hidden" />
+  <div id="home-current" class="muted" style="font-size: 12px; margin-top: 0.35rem;"></div>
+</div>
+
+<h2 style="margin-top: 1.5rem;">Preferred navigation app</h2>
+<p class="muted" style="font-size: 13px;">
+  Which app the big button opens on a finished plan. Google Maps and GPX carry the
+  full multi-stop loop; the others route to the first stop only.
+</p>
+<div class="stack" style="gap: 0.35rem;">
+  {% for opt in nav_choices %}
+  <label style="display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer;">
+    <input type="radio" name="nav_app" data-cfg="nav_app" value="{{ opt.key }}"
+           {% if opt.key == "google" %}checked{% endif %} style="margin-top: 0.2rem;" />
+    <span>
+      <strong>{{ opt.label }}</strong>
+      {% if opt.full_route %}<span class="badge good">full route</span>
+      {% else %}<span class="badge warn">first stop only</span>{% endif %}
+    </span>
+  </label>
+  {% endfor %}
+</div>
+
+<h2 style="margin-top: 1.5rem;">Units</h2>
+<p class="muted" style="font-size: 13px;">How distances are shown (drive distance, address search, coverage radius).</p>
+<div class="stack" style="gap: 0.35rem;">
+  <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+    <input type="radio" name="units" data-cfg="units" value="metric" checked />
+    <span>Metric <span class="muted">(km, meters)</span></span>
+  </label>
+  <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+    <input type="radio" name="units" data-cfg="units" value="imperial" />
+    <span>Imperial <span class="muted">(miles, feet)</span></span>
+  </label>
+</div>
+
+<h2 style="margin-top: 1.5rem;">Sync across devices</h2>
+<p class="muted" style="font-size: 13px;">
+  Back up your keys so they survive your browser clearing them (iOS Safari wipes
+  saved data after about a week of not visiting) and restore on another device.
+  It is <strong>end-to-end encrypted</strong>: the server stores only an encrypted
+  blob it cannot read, and your sync code never leaves this browser.
+</p>
+
+<div id="sync-newcode" class="flash warn" hidden>
+  <strong>Save this code now</strong> (put it in your password manager). It is the
+  ONLY way to restore your keys if this browser clears them, and it is shown once.
+  <textarea id="sync-newcode-box" rows="2" readonly
+            style="width: 100%; font-family: monospace; margin-top: 0.5rem;"></textarea>
+</div>
+
+<div id="sync-off" hidden>
+  <button type="button" class="btn" id="sync-enable-btn">Enable sync</button>
+  <div style="margin-top: 0.75rem;">
+    <label for="sync-restore-code">Already have a sync code? (restoring after a wipe, or on a new device)</label>
+    <input id="sync-restore-code" type="text" placeholder="paste your sync code" autocomplete="off"
+           style="font-family: monospace;" />
+    <button type="button" class="btn secondary" id="sync-restore-btn" style="margin-top: 0.5rem;">Restore from code</button>
+  </div>
+</div>
+
+<div id="sync-on" hidden>
+  <div class="flash good" style="font-size: 13px;">
+    Sync is <strong>on</strong>. Your keys are backed up encrypted. <span id="sync-updated" class="muted"></span>
+  </div>
+  <label for="sync-code-box">Your sync code (keep it in your password manager)</label>
+  <textarea id="sync-code-box" rows="2" readonly
+            style="width: 100%; font-family: monospace;"></textarea>
+  <div style="margin-top: 0.5rem;">
+    <button type="button" class="btn secondary" id="sync-now-btn">Sync now</button>
+    <button type="button" class="btn secondary" id="sync-stop-btn">Stop syncing</button>
+  </div>
+</div>
+
+<h2 style="margin-top: 1.5rem;">Move to another device (manual)</h2>
+<p class="muted" style="font-size: 13px;">
+  Nothing is synced (that would mean storing your keys on a server). Copy this blob,
+  paste it into WarRoute on your other device, and Import.
+</p>
+<div class="stack">
+  <button type="button" class="btn secondary" id="export-btn">Export my config</button>
+  <textarea id="export-box" rows="4" readonly placeholder="Click Export to reveal"
+            style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>
+  <label for="import-box">Paste a config to import</label>
+  <textarea id="import-box" rows="4" placeholder='{"wigle_token": "..."}'
+            style="width: 100%; font-family: monospace; font-size: 12px;"></textarea>
+  <button type="button" class="btn secondary" id="import-btn">Import config</button>
+  <button type="button" class="btn secondary" id="clear-btn"
+          style="align-self: flex-start;">Clear everything from this browser</button>
+</div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var DEFAULT_NAV = "google";
+
+  // Was onsubmit="return false;" - the settings form is client-side only and must
+  // never navigate (CSP forbids the inline handler, so prevent it here instead).
+  var settingsForm = document.getElementById("settings-form");
+  if (settingsForm) {
+    settingsForm.addEventListener("submit", function (e) { e.preventDefault(); });
+  }
+
+  function indicate(msg) {
+    var el = document.getElementById("save-indicator");
+    el.textContent = msg;
+  }
+
+  function showHome() {
+    var c = WarRoute.load();
+    var el = document.getElementById("home-current");
+    if (c.home_lat && c.home_lon) {
+      el.textContent = "Current home: " + (c.home_label ? c.home_label + " (" : "")
+        + c.home_lat + ", " + c.home_lon + (c.home_label ? ")" : "");
+    } else {
+      el.textContent = "No home set yet.";
+    }
+  }
+
+  // Populate every field from stored config.
+  function populate() {
+    var c = WarRoute.load();
+    document.querySelectorAll("[data-cfg]").forEach(function (el) {
+      var k = el.dataset.cfg;
+      if (el.type === "radio") {
+        // Use the stored value if present; otherwise keep the HTML default
+        // (the option carrying the `checked` attribute).
+        if (c[k]) { el.checked = c[k] === el.value; }
+      } else if (c[k] != null) {
+        el.value = c[k];
+      }
+    });
+    if (c.home_label) { document.getElementById("home-address").value = c.home_label; }
+    showHome();
+  }
+
+  // Read all fields into localStorage.
+  function collect() {
+    var c = WarRoute.load();
+    document.querySelectorAll("[data-cfg]").forEach(function (el) {
+      var k = el.dataset.cfg;
+      if (el.type === "radio") {
+        if (el.checked) { c[k] = el.value; }
+      } else {
+        c[k] = (el.value || "").trim();
+      }
+    });
+    WarRoute.save(c);
+    WarRoute.syncPushIfEnabled();
+    WarRoute.applyUnits(document);
+    indicate("Saved to this browser " + new Date().toLocaleTimeString());
+    showHome();
+  }
+
+  document.querySelectorAll("[data-cfg]").forEach(function (el) {
+    el.addEventListener("input", collect);
+    el.addEventListener("change", collect);
+  });
+
+  // The geocode partial calls warrouteSelectGeocode(this); define the settings
+  // behavior (fills home lat/lon/label). Plan page defines its own version.
+  window.warrouteSelectGeocode = function (btn) {
+    document.getElementById("home_lat").value = btn.dataset.lat;
+    document.getElementById("home_lon").value = btn.dataset.lon;
+    document.getElementById("home_label").value =
+      btn.dataset.label || (btn.dataset.lat + "," + btn.dataset.lon);
+    document.getElementById("home-address").value = btn.dataset.label || "";
+    document.getElementById("home-hits").innerHTML = "";
+    collect();
+  };
+
+  document.getElementById("export-btn").addEventListener("click", function () {
+    document.getElementById("export-box").value = JSON.stringify(WarRoute.load(), null, 2);
+    document.getElementById("export-box").select();
+    indicate("Exported below - copy it.");
+  });
+  document.getElementById("import-btn").addEventListener("click", function () {
+    var raw = document.getElementById("import-box").value.trim();
+    if (!raw) { return; }
+    try {
+      var c = JSON.parse(raw);
+      if (typeof c !== "object" || Array.isArray(c)) { throw new Error("not an object"); }
+      WarRoute.save(c);
+      populate();
+      indicate("Imported.");
+    } catch (e) {
+      indicate("Import failed: invalid JSON.");
+    }
+  });
+  document.getElementById("clear-btn").addEventListener("click", function () {
+    if (!confirm("Remove all your keys and prefs from this browser?")) { return; }
+    localStorage.removeItem(WarRoute.KEY);
+    populate();
+    indicate("Cleared from this browser.");
+  });
+
+  // ---- Sync across devices (end-to-end encrypted) ----
+  function renderSync() {
+    var on = WarRoute.syncEnabled();
+    document.getElementById("sync-off").hidden = on;
+    document.getElementById("sync-on").hidden = !on;
+    if (on) { document.getElementById("sync-code-box").value = WarRoute.syncCode(); }
+  }
+  document.getElementById("sync-enable-btn").addEventListener("click", async function () {
+    this.disabled = true;
+    try {
+      var code = await WarRoute.enableSync();
+      document.getElementById("sync-newcode-box").value = code;
+      document.getElementById("sync-newcode").hidden = false;
+      renderSync();
+      indicate("Sync enabled and backed up.");
+    } catch (e) {
+      indicate("Enable sync failed: " + e.message);
+    }
+    this.disabled = false;
+  });
+  document.getElementById("sync-restore-btn").addEventListener("click", async function () {
+    var code = document.getElementById("sync-restore-code").value.trim();
+    if (!code) { return; }
+    this.disabled = true;
+    try {
+      await WarRoute.syncPull(code);
+      populate();
+      renderSync();
+      indicate("Restored from your sync code.");
+    } catch (e) {
+      indicate("Restore failed: " + e.message);
+    }
+    this.disabled = false;
+  });
+  document.getElementById("sync-now-btn").addEventListener("click", async function () {
+    this.disabled = true;
+    try { await WarRoute.syncPush(); indicate("Synced just now."); }
+    catch (e) { indicate("Sync failed: " + e.message); }
+    this.disabled = false;
+  });
+  document.getElementById("sync-stop-btn").addEventListener("click", async function () {
+    if (!confirm("Stop syncing and delete the server copy? Your keys stay in this browser.")) { return; }
+    await WarRoute.disableSync();
+    renderSync();
+    indicate("Sync stopped; server copy deleted.");
+  });
+  renderSync();
+
+  populate();
+})();
+</script>
+{% endblock %}

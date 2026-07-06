@@ -1,0 +1,12 @@
+[Unit]
+Description=Fire WarRoute departure-time alarm scan every minute
+Documentation=https://github.com/DarkHorse-InfoSec/warroute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=warroute-notify-due.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,4 @@
+WigleWifi-1.6,appRelease=manual,model=WarRoute-Template,release=1,device=manual,display=manual,board=manual,brand=WarRoute
+MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type
+AA:BB:CC:00:00:01,ExampleNetwork,[WPA2-PSK-CCMP][ESS],2026-05-14 12:00:00,6,-55,44.94000,-72.21000,250.0,5.0,WIFI
+AA:BB:CC:00:00:02,AnotherExample,[WPA3-SAE-CCMP][ESS],2026-05-14 12:01:30,11,-67,44.94010,-72.21010,250.0,5.0,WIFI

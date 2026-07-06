@@ -1,0 +1,41 @@
+[Unit]
+Description=WarRoute departure-time ntfy alarm scanner (Phase 6b.2)
+Documentation=https://github.com/DarkHorse-InfoSec/warroute
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=warroute
+Group=warroute
+WorkingDirectory=/home/warroute/warroute
+
+# Same env contract as warroute.service: secrets via root-owned EnvironmentFile,
+# DB + cache paths overridden for prod layout.
+EnvironmentFile=/etc/warroute/warroute.env
+Environment=DATABASE_URL=sqlite:////var/lib/warroute/warroute.db
+Environment=HOME=/home/warroute/warroute
+Environment=UV_CACHE_DIR=/home/warroute/warroute/.uv-cache
+
+# Quick + idempotent: scan scheduled_departures, fire ntfy for any due rows,
+# mark notified_at as dedup. Single SQLite query + at most a few HTTPS POSTs.
+ExecStart=/usr/local/bin/uv run --project /home/warroute/warroute warroute notify-due
+
+# --- hardening (mirrors warroute.service) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/warroute /home/warroute/warroute
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+LimitNOFILE=2048
